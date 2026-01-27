@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,8 +12,8 @@ import (
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-service/client"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/retry"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
 var (
@@ -22,6 +23,14 @@ var (
 		Max:       30 * time.Second,
 		MaxJitter: 250 * time.Millisecond,
 	}
+)
+
+var (
+	errRootNotDir           = errors.New("root path is not a directory")
+	errUnknownFileAlias     = errors.New("unknown file alias")
+	errHTTPRequestFailed    = errors.New("http request failed")
+	errDatabaseCopy         = errors.New("database copy failed")
+	errMissingContentLength = errors.New("missing Content-Length header")
 )
 
 // Client handles downloading files from a sync server.
@@ -43,7 +52,7 @@ func NewClient(config Config, serverURL string) (*Client, error) {
 		return nil, fmt.Errorf("cannot access root directory: %w", err)
 	}
 	if !rootInfo.IsDir() {
-		return nil, fmt.Errorf("root path is not a directory: %s", root)
+		return nil, errRootNotDir
 	}
 
 	// Create the HTTP client
@@ -57,7 +66,7 @@ func NewClient(config Config, serverURL string) (*Client, error) {
 }
 
 // SyncAll syncs all known databases for the given chains.
-func (c *Client) SyncAll(ctx context.Context, chains []types.ChainID, resume bool) error {
+func (c *Client) SyncAll(ctx context.Context, chains []eth.ChainID, resume bool) error {
 	for _, chain := range chains {
 		for fileAlias := range Databases {
 			if err := c.SyncDatabase(ctx, chain, fileAlias, resume); err != nil {
@@ -70,11 +79,11 @@ func (c *Client) SyncAll(ctx context.Context, chains []types.ChainID, resume boo
 
 // SyncDatabase downloads the named file from the server.
 // If the local file exists, it will attempt to resume the download if resume is true.
-func (c *Client) SyncDatabase(ctx context.Context, chainID types.ChainID, database Database, resume bool) error {
+func (c *Client) SyncDatabase(ctx context.Context, chainID eth.ChainID, database Database, resume bool) error {
 	// Validate file alias
 	filePath, exists := Databases[database]
 	if !exists {
-		return fmt.Errorf("unknown file alias: %s", database)
+		return fmt.Errorf("%w: %s", errUnknownFileAlias, database)
 	}
 
 	// Ensure the chain directory exists
@@ -111,7 +120,7 @@ func (c *Client) SyncDatabase(ctx context.Context, chainID types.ChainID, databa
 }
 
 // attemptSync makes a single attempt to sync the file
-func (c *Client) attemptSync(ctx context.Context, chainID types.ChainID, database Database, absPath string, initialSize int64) error {
+func (c *Client) attemptSync(ctx context.Context, chainID eth.ChainID, database Database, absPath string, initialSize int64) error {
 	// First do a HEAD request to get the file size
 	path := c.buildURLPath(chainID, database)
 	resp, err := c.httpClient.Get(ctx, path, nil, http.Header{"X-HTTP-Method-Override": []string{"HEAD"}})
@@ -122,7 +131,7 @@ func (c *Client) attemptSync(ctx context.Context, chainID types.ChainID, databas
 		return fmt.Errorf("HEAD request body failed to close: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HEAD request failed with status %d", resp.StatusCode)
+		return fmt.Errorf("HEAD %w: status %d", errHTTPRequestFailed, resp.StatusCode)
 	}
 	totalSize, err := parseContentLength(resp.Header)
 	if err != nil {
@@ -149,7 +158,7 @@ func (c *Client) attemptSync(ctx context.Context, chainID types.ChainID, databas
 		}
 	}()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("GET request failed with status %d", resp.StatusCode)
+		return fmt.Errorf("GET %w: status %d", errHTTPRequestFailed, resp.StatusCode)
 	}
 
 	// Open the output file in the appropriate mode
@@ -171,14 +180,14 @@ func (c *Client) attemptSync(ctx context.Context, chainID types.ChainID, databas
 	// Copy the data to disk
 	_, err = io.Copy(f, resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to copy data: %s", database)
+		return fmt.Errorf("%w: %s", errDatabaseCopy, database)
 	}
 
 	return nil
 }
 
 // buildURLPath creates the URL path for a given database download request
-func (c *Client) buildURLPath(chainID types.ChainID, database Database) string {
+func (c *Client) buildURLPath(chainID eth.ChainID, database Database) string {
 	return fmt.Sprintf("dbsync/%s/%s", chainID.String(), database)
 }
 
@@ -186,7 +195,7 @@ func (c *Client) buildURLPath(chainID types.ChainID, database Database) string {
 func parseContentLength(h http.Header) (int64, error) {
 	v := h.Get("Content-Length")
 	if v == "" {
-		return 0, fmt.Errorf("missing Content-Length header")
+		return 0, errMissingContentLength
 	}
 	return strconv.ParseInt(v, 10, 64)
 }

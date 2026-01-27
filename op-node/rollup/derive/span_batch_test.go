@@ -245,7 +245,7 @@ func TestSpanBatchPayload(t *testing.T) {
 	err = sb.txs.recoverV(chainID)
 	require.NoError(t, err)
 
-	require.Equal(t, rawSpanBatch.spanBatchPayload, sb.spanBatchPayload)
+	requireEqual(t, rawSpanBatch.spanBatchPayload, sb.spanBatchPayload)
 }
 
 func TestSpanBatchBlockCount(t *testing.T) {
@@ -310,7 +310,7 @@ func TestSpanBatchTxs(t *testing.T) {
 	err = sb.txs.recoverV(chainID)
 	require.NoError(t, err)
 
-	require.Equal(t, rawSpanBatch.txs, sb.txs)
+	requireEqual(t, rawSpanBatch.txs, sb.txs)
 }
 
 func TestSpanBatchRoundTrip(t *testing.T) {
@@ -330,7 +330,7 @@ func TestSpanBatchRoundTrip(t *testing.T) {
 	err = sb.txs.recoverV(chainID)
 	require.NoError(t, err)
 
-	require.Equal(t, rawSpanBatch, &sb)
+	requireEqual(t, rawSpanBatch, &sb)
 }
 
 func TestSpanBatchDerive(t *testing.T) {
@@ -478,13 +478,14 @@ func TestSpanBatchReadTxData(t *testing.T) {
 		{"legacy tx", 32, testutils.RandomLegacyTx, true},
 		{"access list tx", 32, testutils.RandomAccessListTx, true},
 		{"dynamic fee tx", 32, testutils.RandomDynamicFeeTx, true},
+		{"setcode tx", 32, testutils.RandomSetCodeTx, true},
 	}
 
 	for i, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			rng := rand.New(rand.NewSource(int64(0x109550 + i)))
 			chainID := new(big.Int).SetUint64(rng.Uint64())
-			signer := types.NewLondonSigner(chainID)
+			signer := types.NewIsthmusSigner(chainID)
 			if !testCase.protected {
 				signer = types.HomesteadSigner{}
 			}

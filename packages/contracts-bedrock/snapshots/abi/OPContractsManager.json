@@ -2,6 +2,31 @@
   {
     "inputs": [
       {
+        "internalType": "contract OPContractsManagerGameTypeAdder",
+        "name": "_opcmGameTypeAdder",
+        "type": "address"
+      },
+      {
+        "internalType": "contract OPContractsManagerDeployer",
+        "name": "_opcmDeployer",
+        "type": "address"
+      },
+      {
+        "internalType": "contract OPContractsManagerUpgrader",
+        "name": "_opcmUpgrader",
+        "type": "address"
+      },
+      {
+        "internalType": "contract OPContractsManagerInteropMigrator",
+        "name": "_opcmInteropMigrator",
+        "type": "address"
+      },
+      {
+        "internalType": "contract OPContractsManagerStandardValidator",
+        "name": "_opcmStandardValidator",
+        "type": "address"
+      },
+      {
         "internalType": "contract ISuperchainConfig",
         "name": "_superchainConfig",
         "type": "address"
@@ -10,126 +35,102 @@
         "internalType": "contract IProtocolVersions",
         "name": "_protocolVersions",
         "type": "address"
-      },
-      {
-        "internalType": "string",
-        "name": "_l1ContractsRelease",
-        "type": "string"
-      },
-      {
-        "components": [
-          {
-            "internalType": "address",
-            "name": "addressManager",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "proxy",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "proxyAdmin",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "l1ChugSplashProxy",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "resolvedDelegateProxy",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "anchorStateRegistry",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "permissionedDisputeGame1",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "permissionedDisputeGame2",
-            "type": "address"
-          }
-        ],
-        "internalType": "struct OPContractsManager.Blueprints",
-        "name": "_blueprints",
-        "type": "tuple"
-      },
-      {
-        "components": [
-          {
-            "internalType": "address",
-            "name": "l1ERC721BridgeImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "optimismPortalImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "systemConfigImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "optimismMintableERC20FactoryImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "l1CrossDomainMessengerImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "l1StandardBridgeImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "disputeGameFactoryImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "delayedWETHImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "mipsImpl",
-            "type": "address"
-          }
-        ],
-        "internalType": "struct OPContractsManager.Implementations",
-        "name": "_implementations",
-        "type": "tuple"
       }
     ],
     "stateMutability": "nonpayable",
     "type": "constructor"
   },
   {
-    "inputs": [],
-    "name": "OUTPUT_VERSION",
-    "outputs": [
+    "inputs": [
       {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
+        "components": [
+          {
+            "internalType": "string",
+            "name": "saltMixer",
+            "type": "string"
+          },
+          {
+            "internalType": "contract ISystemConfig",
+            "name": "systemConfig",
+            "type": "address"
+          },
+          {
+            "internalType": "contract IDelayedWETH",
+            "name": "delayedWETH",
+            "type": "address"
+          },
+          {
+            "internalType": "GameType",
+            "name": "disputeGameType",
+            "type": "uint32"
+          },
+          {
+            "internalType": "Claim",
+            "name": "disputeAbsolutePrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "uint256",
+            "name": "disputeMaxGameDepth",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "disputeSplitDepth",
+            "type": "uint256"
+          },
+          {
+            "internalType": "Duration",
+            "name": "disputeClockExtension",
+            "type": "uint64"
+          },
+          {
+            "internalType": "Duration",
+            "name": "disputeMaxClockDuration",
+            "type": "uint64"
+          },
+          {
+            "internalType": "uint256",
+            "name": "initialBond",
+            "type": "uint256"
+          },
+          {
+            "internalType": "contract IBigStepper",
+            "name": "vm",
+            "type": "address"
+          },
+          {
+            "internalType": "bool",
+            "name": "permissioned",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct OPContractsManager.AddGameInput[]",
+        "name": "_gameConfigs",
+        "type": "tuple[]"
       }
     ],
-    "stateMutability": "view",
+    "name": "addGameType",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "contract IDelayedWETH",
+            "name": "delayedWETH",
+            "type": "address"
+          },
+          {
+            "internalType": "contract IFaultDisputeGame",
+            "name": "faultDisputeGame",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct OPContractsManager.AddGameOutput[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -162,21 +163,6 @@
             "internalType": "address",
             "name": "resolvedDelegateProxy",
             "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "anchorStateRegistry",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "permissionedDisputeGame1",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "permissionedDisputeGame2",
-            "type": "address"
           }
         ],
         "internalType": "struct OPContractsManager.Blueprints",
@@ -203,7 +189,7 @@
         "type": "address"
       }
     ],
-    "stateMutability": "pure",
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -264,7 +250,7 @@
           },
           {
             "internalType": "bytes",
-            "name": "startingAnchorRoots",
+            "name": "startingAnchorRoot",
             "type": "bytes"
           },
           {
@@ -306,6 +292,11 @@
             "internalType": "Duration",
             "name": "disputeMaxClockDuration",
             "type": "uint64"
+          },
+          {
+            "internalType": "bool",
+            "name": "useCustomGasToken",
+            "type": "bool"
           }
         ],
         "internalType": "struct OPContractsManager.DeployInput",
@@ -353,6 +344,11 @@
             "type": "address"
           },
           {
+            "internalType": "contract IETHLockbox",
+            "name": "ethLockboxProxy",
+            "type": "address"
+          },
+          {
             "internalType": "contract IOptimismPortal2",
             "name": "optimismPortalProxy",
             "type": "address"
@@ -365,11 +361,6 @@
           {
             "internalType": "contract IAnchorStateRegistry",
             "name": "anchorStateRegistryProxy",
-            "type": "address"
-          },
-          {
-            "internalType": "contract IAnchorStateRegistry",
-            "name": "anchorStateRegistryImpl",
             "type": "address"
           },
           {
@@ -403,10 +394,33 @@
   },
   {
     "inputs": [],
+    "name": "devFeatureBitmap",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "implementations",
     "outputs": [
       {
         "components": [
+          {
+            "internalType": "address",
+            "name": "superchainConfigImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "protocolVersionsImpl",
+            "type": "address"
+          },
           {
             "internalType": "address",
             "name": "l1ERC721BridgeImpl",
@@ -415,6 +429,16 @@
           {
             "internalType": "address",
             "name": "optimismPortalImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "optimismPortalInteropImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "ethLockboxImpl",
             "type": "address"
           },
           {
@@ -444,12 +468,37 @@
           },
           {
             "internalType": "address",
+            "name": "anchorStateRegistryImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
             "name": "delayedWETHImpl",
             "type": "address"
           },
           {
             "internalType": "address",
             "name": "mipsImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "faultDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "permissionedDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "superFaultDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "superPermissionedDisputeGameImpl",
             "type": "address"
           }
         ],
@@ -462,13 +511,185 @@
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "l1ContractsRelease",
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "_feature",
+        "type": "bytes32"
+      }
+    ],
+    "name": "isDevFeatureEnabled",
     "outputs": [
       {
-        "internalType": "string",
+        "internalType": "bool",
         "name": "",
-        "type": "string"
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "bool",
+            "name": "usePermissionlessGame",
+            "type": "bool"
+          },
+          {
+            "components": [
+              {
+                "internalType": "Hash",
+                "name": "root",
+                "type": "bytes32"
+              },
+              {
+                "internalType": "uint256",
+                "name": "l2SequenceNumber",
+                "type": "uint256"
+              }
+            ],
+            "internalType": "struct Proposal",
+            "name": "startingAnchorRoot",
+            "type": "tuple"
+          },
+          {
+            "components": [
+              {
+                "internalType": "address",
+                "name": "proposer",
+                "type": "address"
+              },
+              {
+                "internalType": "address",
+                "name": "challenger",
+                "type": "address"
+              },
+              {
+                "internalType": "uint256",
+                "name": "maxGameDepth",
+                "type": "uint256"
+              },
+              {
+                "internalType": "uint256",
+                "name": "splitDepth",
+                "type": "uint256"
+              },
+              {
+                "internalType": "uint256",
+                "name": "initBond",
+                "type": "uint256"
+              },
+              {
+                "internalType": "Duration",
+                "name": "clockExtension",
+                "type": "uint64"
+              },
+              {
+                "internalType": "Duration",
+                "name": "maxClockDuration",
+                "type": "uint64"
+              }
+            ],
+            "internalType": "struct OPContractsManagerInteropMigrator.GameParameters",
+            "name": "gameParameters",
+            "type": "tuple"
+          },
+          {
+            "components": [
+              {
+                "internalType": "contract ISystemConfig",
+                "name": "systemConfigProxy",
+                "type": "address"
+              },
+              {
+                "internalType": "Claim",
+                "name": "cannonPrestate",
+                "type": "bytes32"
+              },
+              {
+                "internalType": "Claim",
+                "name": "cannonKonaPrestate",
+                "type": "bytes32"
+              }
+            ],
+            "internalType": "struct OPContractsManager.OpChainConfig[]",
+            "name": "opChainConfigs",
+            "type": "tuple[]"
+          }
+        ],
+        "internalType": "struct OPContractsManagerInteropMigrator.MigrateInput",
+        "name": "_input",
+        "type": "tuple"
+      }
+    ],
+    "name": "migrate",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "opcmDeployer",
+    "outputs": [
+      {
+        "internalType": "contract OPContractsManagerDeployer",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "opcmGameTypeAdder",
+    "outputs": [
+      {
+        "internalType": "contract OPContractsManagerGameTypeAdder",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "opcmInteropMigrator",
+    "outputs": [
+      {
+        "internalType": "contract OPContractsManagerInteropMigrator",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "opcmStandardValidator",
+    "outputs": [
+      {
+        "internalType": "contract OPContractsManagerStandardValidator",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "opcmUpgrader",
+    "outputs": [
+      {
+        "internalType": "contract OPContractsManagerUpgrader",
+        "name": "",
+        "type": "address"
       }
     ],
     "stateMutability": "view",
@@ -501,8 +722,114 @@
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "version",
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "contract ISystemConfig",
+            "name": "systemConfigProxy",
+            "type": "address"
+          },
+          {
+            "internalType": "Claim",
+            "name": "cannonPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "Claim",
+            "name": "cannonKonaPrestate",
+            "type": "bytes32"
+          }
+        ],
+        "internalType": "struct OPContractsManager.UpdatePrestateInput[]",
+        "name": "_prestateUpdateInputs",
+        "type": "tuple[]"
+      }
+    ],
+    "name": "updatePrestate",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "contract ISystemConfig",
+            "name": "systemConfigProxy",
+            "type": "address"
+          },
+          {
+            "internalType": "Claim",
+            "name": "cannonPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "Claim",
+            "name": "cannonKonaPrestate",
+            "type": "bytes32"
+          }
+        ],
+        "internalType": "struct OPContractsManager.OpChainConfig[]",
+        "name": "_opChainConfigs",
+        "type": "tuple[]"
+      }
+    ],
+    "name": "upgrade",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "contract ISuperchainConfig",
+        "name": "_superchainConfig",
+        "type": "address"
+      }
+    ],
+    "name": "upgradeSuperchainConfig",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "contract ISystemConfig",
+            "name": "sysCfg",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "absolutePrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "uint256",
+            "name": "l2ChainID",
+            "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "proposer",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct OPContractsManagerStandardValidator.ValidationInput",
+        "name": "_input",
+        "type": "tuple"
+      },
+      {
+        "internalType": "bool",
+        "name": "_allowFailure",
+        "type": "bool"
+      }
+    ],
+    "name": "validate",
     "outputs": [
       {
         "internalType": "string",
@@ -514,35 +841,199 @@
     "type": "function"
   },
   {
-    "anonymous": false,
     "inputs": [
       {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "outputVersion",
-        "type": "uint256"
+        "components": [
+          {
+            "internalType": "contract ISystemConfig",
+            "name": "sysCfg",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "cannonPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "cannonKonaPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "uint256",
+            "name": "l2ChainID",
+            "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "proposer",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct OPContractsManagerStandardValidator.ValidationInputDev",
+        "name": "_input",
+        "type": "tuple"
       },
       {
-        "indexed": true,
-        "internalType": "uint256",
-        "name": "l2ChainId",
-        "type": "uint256"
-      },
-      {
-        "indexed": true,
-        "internalType": "address",
-        "name": "deployer",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "bytes",
-        "name": "deployOutput",
-        "type": "bytes"
+        "internalType": "bool",
+        "name": "_allowFailure",
+        "type": "bool"
       }
     ],
-    "name": "Deployed",
-    "type": "event"
+    "name": "validate",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "contract ISystemConfig",
+            "name": "sysCfg",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "absolutePrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "uint256",
+            "name": "l2ChainID",
+            "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "proposer",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct OPContractsManagerStandardValidator.ValidationInput",
+        "name": "_input",
+        "type": "tuple"
+      },
+      {
+        "internalType": "bool",
+        "name": "_allowFailure",
+        "type": "bool"
+      },
+      {
+        "components": [
+          {
+            "internalType": "address",
+            "name": "l1PAOMultisig",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "challenger",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct OPContractsManagerStandardValidator.ValidationOverrides",
+        "name": "_overrides",
+        "type": "tuple"
+      }
+    ],
+    "name": "validateWithOverrides",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "contract ISystemConfig",
+            "name": "sysCfg",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "cannonPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "cannonKonaPrestate",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "uint256",
+            "name": "l2ChainID",
+            "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "proposer",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct OPContractsManagerStandardValidator.ValidationInputDev",
+        "name": "_input",
+        "type": "tuple"
+      },
+      {
+        "internalType": "bool",
+        "name": "_allowFailure",
+        "type": "bool"
+      },
+      {
+        "components": [
+          {
+            "internalType": "address",
+            "name": "l1PAOMultisig",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "challenger",
+            "type": "address"
+          }
+        ],
+        "internalType": "struct OPContractsManagerStandardValidator.ValidationOverrides",
+        "name": "_overrides",
+        "type": "tuple"
+      }
+    ],
+    "name": "validateWithOverrides",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "version",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
   },
   {
     "inputs": [
@@ -573,27 +1064,23 @@
   },
   {
     "inputs": [],
-    "name": "BytesArrayTooLong",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "DeploymentFailed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "EmptyInitcode",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "IdentityPrecompileCallFailed",
-    "type": "error"
-  },
-  {
-    "inputs": [],
     "name": "InvalidChainId",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "devFeature",
+        "type": "bytes32"
+      }
+    ],
+    "name": "InvalidDevFeatureAccess",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidGameConfigs",
     "type": "error"
   },
   {
@@ -609,7 +1096,7 @@
   },
   {
     "inputs": [],
-    "name": "InvalidStartingAnchorRoots",
+    "name": "InvalidStartingAnchorRoot",
     "type": "error"
   },
   {
@@ -619,34 +1106,38 @@
   },
   {
     "inputs": [],
-    "name": "NotABlueprint",
+    "name": "OPContractsManager_V2Enabled",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "ReservedBitsSet",
+    "name": "OnlyDelegatecall",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "PrestateNotSet",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "PrestateRequired",
     "type": "error"
   },
   {
     "inputs": [
       {
-        "internalType": "bytes",
-        "name": "data",
-        "type": "bytes"
+        "internalType": "contract ISystemConfig",
+        "name": "systemConfig",
+        "type": "address"
       }
     ],
-    "name": "UnexpectedPreambleData",
+    "name": "SuperchainConfigMismatch",
     "type": "error"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint8",
-        "name": "version",
-        "type": "uint8"
-      }
-    ],
-    "name": "UnsupportedERCVersion",
+    "inputs": [],
+    "name": "SuperchainProxyAdminMismatch",
     "type": "error"
   }
 ]

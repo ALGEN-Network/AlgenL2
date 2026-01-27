@@ -34,12 +34,13 @@ cmd/
 ├── check-derivation              - Check that transactions can be confirmed and safety can be consolidated
 ├── check-ecotone                 - Checks for Ecotone network upgrade
 ├── check-fjord                   - Checks for Fjord network upgrade
+├── check-prestate                - Checks a fault proof absolute prestate's chain compatibility. e.g: go run cmd/check-prestate --prestate-hash <HASH>
 ├── deposit-hash                  - Determine the L2 deposit tx hash, based on log event(s) emitted by a L1 tx.
 ├── ecotone-scalar                - Translate between serialized and human-readable L1 fee scalars (introduced in Ecotone upgrade).
 ├── op-simulate                   - Simulate a remote transaction in a local Geth EVM for block-processing debugging.
 ├── protocol-version              - Translate between serialized and human-readable protocol versions.
 ├── receipt-reference-builder     - Receipt data collector for pre-Canyon deposit-nonce metadata.
-└── unclaimed-credits             - Utilitiy to inspect credits of resolved fault-proof games.
+└── unclaimed-credits             - Utility to inspect credits of resolved fault-proof games.
 ```
 
 ## Product

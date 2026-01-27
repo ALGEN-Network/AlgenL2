@@ -57,7 +57,7 @@ func main() {
 		},
 		{
 			Name:        "doc",
-			Subcommands: doc.NewSubcommands(metrics.NewMetrics("default")),
+			Subcommands: doc.NewSubcommands(metrics.NewMetrics("default", nil)),
 		},
 		{
 			Name:        "networks",
@@ -79,7 +79,7 @@ func RollupNodeMain(ctx *cli.Context, closeApp context.CancelCauseFunc) (cliapp.
 	oplog.SetGlobalLogHandler(log.Handler())
 	opservice.ValidateEnvVars(flags.EnvVarPrefix, flags.Flags, log)
 	opservice.WarnOnDeprecatedFlags(ctx, flags.DeprecatedFlags, log)
-	m := metrics.NewMetrics("default")
+	m := metrics.NewMetrics("default", nil)
 
 	cfg, err := opnode.NewConfig(ctx, log)
 	if err != nil {
@@ -87,14 +87,14 @@ func RollupNodeMain(ctx *cli.Context, closeApp context.CancelCauseFunc) (cliapp.
 	}
 	cfg.Cancel = closeApp
 
-	// Only pretty-print the banner if it is a terminal log. Other log it as key-value pairs.
+	// Only pretty-print the banner if it is a terminal log. Otherwise log it as key-value pairs.
 	if logCfg.Format == "terminal" {
 		log.Info("rollup config:\n" + cfg.Rollup.Description(chaincfg.L2ChainIDToNetworkDisplayName))
 	} else {
 		cfg.Rollup.LogDescription(log, chaincfg.L2ChainIDToNetworkDisplayName)
 	}
 
-	n, err := node.New(ctx.Context, cfg, log, VersionWithMeta, m)
+	n, err := node.New(ctx.Context, cfg, log, VersionWithMeta, m, nil)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create the rollup node: %w", err)
 	}

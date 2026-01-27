@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources/caching"
@@ -24,25 +25,20 @@ func L1ClientDefaultConfig(config *rollup.Config, trustRPC bool, kind RPCProvide
 }
 
 func L1ClientSimpleConfig(trustRPC bool, kind RPCProviderKind, cacheSize int) *L1ClientConfig {
-	span := cacheSize
-	if span > 1000 { // sanity cap. If a large sequencing window is configured, do not make the cache too large
-		span = 1000
-	}
 	return &L1ClientConfig{
 		EthClientConfig: EthClientConfig{
 			// receipts and transactions are cached per block
-			ReceiptsCacheSize:     span,
-			TransactionsCacheSize: span,
-			HeadersCacheSize:      span,
-			PayloadsCacheSize:     span,
+			ReceiptsCacheSize:     cacheSize,
+			TransactionsCacheSize: cacheSize,
+			HeadersCacheSize:      cacheSize,
+			PayloadsCacheSize:     cacheSize,
 			MaxRequestsPerBatch:   20, // TODO: tune batch param
 			MaxConcurrentRequests: 10,
 			TrustRPC:              trustRPC,
 			MustBePostMerge:       false,
 			RPCProviderKind:       kind,
 			MethodResetDuration:   time.Minute,
-			// Not bounded by span, to cover find-sync-start range fully for speedy recovery after errors.
-			BlockRefsCacheSize: cacheSize,
+			BlockRefsCacheSize:    cacheSize,
 		},
 	}
 }
@@ -53,6 +49,8 @@ func L1ClientSimpleConfig(trustRPC bool, kind RPCProviderKind, cacheSize int) *L
 type L1Client struct {
 	*EthClient
 }
+
+var _ apis.L1EthClient = (*L1Client)(nil)
 
 // NewL1Client wraps a RPC with bindings to fetch L1 data, while logging errors, tracking metrics (optional), and caching.
 func NewL1Client(client client.RPC, log log.Logger, metrics caching.Metrics, config *L1ClientConfig) (*L1Client, error) {

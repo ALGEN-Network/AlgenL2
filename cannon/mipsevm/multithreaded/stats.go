@@ -1,6 +1,7 @@
 package multithreaded
 
 import (
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	lru "github.com/hashicorp/golang-lru/v2/simplelru"
 
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm"
@@ -13,10 +14,8 @@ type StatsTracker interface {
 	trackSCFailure(threadId Word, step uint64)
 	trackReservationInvalidation()
 	trackForcedPreemption()
-	trackWakeupTraversalStart()
-	trackWakeup()
-	trackWakeupFail()
 	trackThreadActivated(tid Word, step uint64)
+	trackInstructionCacheMiss(pc Word)
 	populateDebugInfo(debugInfo *mipsevm.DebugInfo)
 }
 
@@ -32,11 +31,9 @@ func (s *noopStatsTracker) trackSCSuccess(threadId Word, step uint64)      {}
 func (s *noopStatsTracker) trackSCFailure(threadId Word, step uint64)      {}
 func (s *noopStatsTracker) trackReservationInvalidation()                  {}
 func (s *noopStatsTracker) trackForcedPreemption()                         {}
-func (s *noopStatsTracker) trackWakeupTraversalStart()                     {}
-func (s *noopStatsTracker) trackWakeup()                                   {}
-func (s *noopStatsTracker) trackWakeupFail()                               {}
 func (s *noopStatsTracker) trackThreadActivated(tid Word, step uint64)     {}
 func (s *noopStatsTracker) populateDebugInfo(debugInfo *mipsevm.DebugInfo) {}
+func (s *noopStatsTracker) trackInstructionCacheMiss(pc Word)              {}
 
 var _ StatsTracker = (*noopStatsTracker)(nil)
 
@@ -44,7 +41,6 @@ var _ StatsTracker = (*noopStatsTracker)(nil)
 type statsTrackerImpl struct {
 	// State
 	lastLLStepByThread    *lru.LRU[Word, uint64]
-	isWakeupTraversal     bool
 	activeThreadId        Word
 	lastActiveStepThread0 uint64
 	// Stats
@@ -54,8 +50,9 @@ type statsTrackerImpl struct {
 	// Tracks RMW reservation invalidation due to reserved memory being accessed outside of the RMW sequence
 	reservationInvalidationCount uint64
 	forcedPreemptionCount        uint64
-	failedWakeupCount            uint64
 	idleStepCountThread0         uint64
+	icacheMissCount              uint64
+	highestICacheMissPC          Word
 }
 
 func (s *statsTrackerImpl) populateDebugInfo(debugInfo *mipsevm.DebugInfo) {
@@ -64,8 +61,9 @@ func (s *statsTrackerImpl) populateDebugInfo(debugInfo *mipsevm.DebugInfo) {
 	debugInfo.MaxStepsBetweenLLAndSC = s.maxStepsBetweenLLAndSC
 	debugInfo.ReservationInvalidationCount = s.reservationInvalidationCount
 	debugInfo.ForcedPreemptionCount = s.forcedPreemptionCount
-	debugInfo.FailedWakeupCount = s.failedWakeupCount
 	debugInfo.IdleStepCountThread0 = s.idleStepCountThread0
+	debugInfo.InstructionCacheMissCount = s.icacheMissCount
+	debugInfo.HighestICacheMissPC = hexutil.Uint64(s.highestICacheMissPC)
 }
 
 func (s *statsTrackerImpl) trackLL(threadId Word, step uint64) {
@@ -102,21 +100,6 @@ func (s *statsTrackerImpl) trackForcedPreemption() {
 	s.forcedPreemptionCount += 1
 }
 
-func (s *statsTrackerImpl) trackWakeupTraversalStart() {
-	s.isWakeupTraversal = true
-}
-
-func (s *statsTrackerImpl) trackWakeup() {
-	s.isWakeupTraversal = false
-}
-
-func (s *statsTrackerImpl) trackWakeupFail() {
-	if s.isWakeupTraversal {
-		s.failedWakeupCount += 1
-	}
-	s.isWakeupTraversal = false
-}
-
 func (s *statsTrackerImpl) trackThreadActivated(tid Word, step uint64) {
 	if s.activeThreadId == Word(0) && tid != Word(0) {
 		// Thread 0 has been deactivated, start tracking to capture idle steps
@@ -127,6 +110,13 @@ func (s *statsTrackerImpl) trackThreadActivated(tid Word, step uint64) {
 		s.idleStepCountThread0 += idleSteps
 	}
 	s.activeThreadId = tid
+}
+
+func (s *statsTrackerImpl) trackInstructionCacheMiss(pc Word) {
+	s.icacheMissCount += 1
+	if pc > s.highestICacheMissPC {
+		s.highestICacheMissPC = pc
+	}
 }
 
 func NewStatsTracker() StatsTracker {

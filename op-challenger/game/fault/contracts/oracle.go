@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-challenger/game/keccak/merkle"
 	keccakTypes "github.com/ethereum-optimism/optimism/op-challenger/game/keccak/types"
 	preimage "github.com/ethereum-optimism/optimism/op-preimage"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching/rpcblock"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
@@ -34,6 +35,7 @@ const (
 	methodProposalBlocksLen          = "proposalBlocksLen"
 	methodProposalBlocks             = "proposalBlocks"
 	methodPreimagePartOk             = "preimagePartOk"
+	methodPreimageParts              = "preimageParts"
 	methodMinProposalSize            = "minProposalSize"
 	methodChallengeFirstLPP          = "challengeFirstLPP"
 	methodChallengeLPP               = "challengeLPP"
@@ -126,7 +128,7 @@ func (c *PreimageOracleContractLatest) AddGlobalDataTx(data *types.PreimageOracl
 		return call.ToTxCandidate()
 	case preimage.BlobKeyType:
 		call := c.contract.Call(methodLoadBlobPreimagePart,
-			new(big.Int).SetUint64(data.BlobFieldIndex),
+			new(big.Int).SetBytes(data.ZPoint[:]),
 			new(big.Int).SetBytes(data.GetPreimageWithoutSize()),
 			data.BlobCommitment,
 			data.BlobProof,
@@ -169,7 +171,7 @@ func (c *PreimageOracleContractLatest) MinLargePreimageSize(ctx context.Context)
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch min lpp size bytes: %w", err)
 	}
-	return result.GetBigInt(0).Uint64(), nil
+	return bigs.Uint64Strict(result.GetBigInt(0)), nil
 }
 
 // ChallengePeriod returns the challenge period for large preimages.
@@ -181,7 +183,7 @@ func (c *PreimageOracleContractLatest) ChallengePeriod(ctx context.Context) (uin
 	if err != nil {
 		return 0, fmt.Errorf("failed to fetch challenge period: %w", err)
 	}
-	period := result.GetBigInt(0).Uint64()
+	period := bigs.Uint64Strict(result.GetBigInt(0))
 	c.challengePeriod.Store(period)
 	return period, nil
 }
@@ -292,7 +294,14 @@ func (c *PreimageOracleContractLatest) GetInputDataBlocks(ctx context.Context, b
 	}
 	blockNums := make([]uint64, 0, len(results))
 	for _, result := range results {
-		blockNums = append(blockNums, result.GetUint64(0))
+		num := result.GetUint64(0)
+		if len(blockNums) > 0 && blockNums[len(blockNums)-1] == num {
+			// Deduplicate block numbers. The contract guarantees they are in order so we just need to check if the
+			// previous block number is the same as this one.
+			// Duplicate entries happen when there are two addLeavesLPP calls in the same block.
+			continue
+		}
+		blockNums = append(blockNums, num)
 	}
 	return blockNums, nil
 }
@@ -337,6 +346,15 @@ func (c *PreimageOracleContractLatest) GlobalDataExists(ctx context.Context, dat
 	return results.GetBool(0), nil
 }
 
+func (c *PreimageOracleContractLatest) GetGlobalData(ctx context.Context, data *types.PreimageOracleData) ([32]byte, error) {
+	call := c.contract.Call(methodPreimageParts, common.Hash(data.OracleKey), new(big.Int).SetUint64(uint64(data.OracleOffset)))
+	results, err := c.multiCaller.SingleCall(ctx, rpcblock.Latest, call)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("failed to get preimageParts: %w", err)
+	}
+	return results.GetBytes32(0), nil
+}
+
 func (c *PreimageOracleContractLatest) ChallengeTx(ident keccakTypes.LargePreimageIdent, challenge keccakTypes.Challenge) (txmgr.TxCandidate, error) {
 	var call *batching.ContractCall
 	if challenge.Prestate == (keccakTypes.Leaf{}) {
@@ -369,7 +387,7 @@ func (c *PreimageOracleContractLatest) GetMinBondLPP(ctx context.Context) (*big.
 		return nil, fmt.Errorf("failed to fetch min bond size for LPPs: %w", err)
 	}
 	period := result.GetBigInt(0)
-	c.minBondSizeLPP.Store(period.Uint64())
+	c.minBondSizeLPP.Store(bigs.Uint64Strict(period))
 	return period, nil
 }
 
@@ -477,6 +495,7 @@ type PreimageOracleContract interface {
 	GetInputDataBlocks(ctx context.Context, block rpcblock.Block, ident keccakTypes.LargePreimageIdent) ([]uint64, error)
 	DecodeInputData(data []byte) (*big.Int, keccakTypes.InputData, error)
 	GlobalDataExists(ctx context.Context, data *types.PreimageOracleData) (bool, error)
+	GetGlobalData(ctx context.Context, data *types.PreimageOracleData) ([32]byte, error)
 	ChallengeTx(ident keccakTypes.LargePreimageIdent, challenge keccakTypes.Challenge) (txmgr.TxCandidate, error)
 	GetMinBondLPP(ctx context.Context) (*big.Int, error)
 }

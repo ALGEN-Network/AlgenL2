@@ -1,23 +1,29 @@
 package sync
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
+)
+
+var (
+	errInvalidRootDirectory = errors.New("invalid root directory")
+	errInvalidPath          = errors.New("invalid path")
 )
 
 // Server handles sync requests
 type Server struct {
 	config      Config
-	validChains map[types.ChainID]struct{}
+	validChains map[eth.ChainID]struct{}
 }
 
 // NewServer creates a new Server with the given config.
-func NewServer(config Config, chains []types.ChainID) (*Server, error) {
+func NewServer(config Config, chains []eth.ChainID) (*Server, error) {
 	// Convert root to absolute path for security
 	root, err := filepath.Abs(config.DataDir)
 	if err != nil {
@@ -30,11 +36,11 @@ func NewServer(config Config, chains []types.ChainID) (*Server, error) {
 		return nil, fmt.Errorf("cannot access root directory: %w", err)
 	}
 	if !rootInfo.IsDir() {
-		return nil, fmt.Errorf("root path is not a directory: %s", root)
+		return nil, fmt.Errorf("root path is not a directory: %s. %w", root, errInvalidRootDirectory)
 	}
 
 	// Build map of valid chains for efficient lookup
-	validChains := make(map[types.ChainID]struct{}, len(chains))
+	validChains := make(map[eth.ChainID]struct{}, len(chains))
 	for _, chain := range chains {
 		validChains[chain] = struct{}{}
 	}
@@ -45,16 +51,16 @@ func NewServer(config Config, chains []types.ChainID) (*Server, error) {
 	}, nil
 }
 
-func parsePath(path string) (types.ChainID, string, error) {
+func parsePath(path string) (eth.ChainID, string, error) {
 	var (
-		chainID   types.ChainID
+		chainID   eth.ChainID
 		fileAlias string
 	)
 
 	// Trim leading and trailing slashes and split into segments
 	segments := strings.Split(strings.Trim(path, "/"), "/")
 	if len(segments) < 2 {
-		return chainID, fileAlias, fmt.Errorf("invalid path: %s", path)
+		return chainID, fileAlias, fmt.Errorf("%w: %s", errInvalidPath, path)
 	}
 	chainIDStr := segments[len(segments)-2]
 	fileAlias = segments[len(segments)-1]

@@ -1,8 +1,11 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
+	"math/big"
 
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
@@ -24,72 +27,101 @@ func DeployOPChain(env *Env, intent *state.Intent, st *state.State, chainID comm
 		return fmt.Errorf("failed to get chain intent: %w", err)
 	}
 
-	var opcmAddr common.Address
-	var deployFunc func() (opcm.DeployOPChainOutput, error)
-	switch intent.L1ContractsLocator.Tag {
-	case standard.ContractsV160Tag, standard.ContractsV170Beta1L2Tag:
-		deployFunc = func() (opcm.DeployOPChainOutput, error) {
-			input, err := makeDCIV160(intent, thisIntent, chainID, st)
-			if err != nil {
-				return opcm.DeployOPChainOutput{}, fmt.Errorf("error making deploy OP chain input: %w", err)
-			}
-
-			opcmAddr = input.Opcm
-			return opcm.DeployOPChainV160(env.L1ScriptHost, input)
-		}
-	default:
-		deployFunc = func() (opcm.DeployOPChainOutput, error) {
-			input, err := makeDCIIsthmus(intent, thisIntent, chainID, st)
-			if err != nil {
-				return opcm.DeployOPChainOutput{}, fmt.Errorf("error making deploy OP chain input: %w", err)
-			}
-
-			opcmAddr = input.Opcm
-			return opcm.DeployOPChainIsthmus(env.L1ScriptHost, input)
-		}
-	}
-
 	var dco opcm.DeployOPChainOutput
 	lgr.Info("deploying OP chain using local allocs", "id", chainID.Hex())
-	dco, err = deployFunc()
+
+	dci, err := makeDCI(intent, thisIntent, chainID, st)
 	if err != nil {
-		return fmt.Errorf("error deploying OP chain: %w", err)
+		return fmt.Errorf("error making deploy OP chain input: %w", err)
 	}
 
-	st.Chains = append(st.Chains, makeChainState(chainID, dco))
-
-	var release string
-	if intent.L1ContractsLocator.IsTag() {
-		release = intent.L1ContractsLocator.Tag
+	if env.UseForge {
+		if env.ForgeClient == nil {
+			return fmt.Errorf("Forge client is nil but UseForge is enabled")
+		}
+		if env.Context == nil {
+			env.Context = context.Background()
+		}
+		lgr.Info("using Forge for DeployOPChain")
+		forgeCaller := opcm.NewDeployOPChainForgeCaller(env.ForgeClient)
+		forgeOpts := []string{
+			"--rpc-url", env.L1RPCUrl,
+			"--broadcast",
+			"--private-key", env.PrivateKey,
+		}
+		dco, _, err = forgeCaller(env.Context, dci, forgeOpts...)
+		if err != nil {
+			return fmt.Errorf("failed to deploy OP Chain with Forge: %w", err)
+		}
 	} else {
-		release = "dev"
+		dco, err = env.Scripts.DeployOPChain.Run(dci)
+		if err != nil {
+			return fmt.Errorf("error deploying OP chain: %w", err)
+		}
 	}
 
 	readInput := opcm.ReadImplementationAddressesInput{
-		DeployOPChainOutput: dco,
-		Opcm:                opcmAddr,
-		Release:             release,
-	}
-	impls, err := opcm.ReadImplementationAddresses(env.L1ScriptHost, readInput)
-	if err != nil {
-		return fmt.Errorf("failed to read implementation addresses: %w", err)
+		AddressManager:                    dco.AddressManager,
+		L1ERC721BridgeProxy:               dco.L1ERC721BridgeProxy,
+		SystemConfigProxy:                 dco.SystemConfigProxy,
+		OptimismMintableERC20FactoryProxy: dco.OptimismMintableERC20FactoryProxy,
+		L1StandardBridgeProxy:             dco.L1StandardBridgeProxy,
+		OptimismPortalProxy:               dco.OptimismPortalProxy,
+		DisputeGameFactoryProxy:           dco.DisputeGameFactoryProxy,
+		DelayedWETHPermissionedGameProxy:  dco.DelayedWETHPermissionedGameProxy,
+		Opcm:                              dci.Opcm,
 	}
 
-	st.ImplementationsDeployment.DelayedWETHImplAddress = impls.DelayedWETH
-	st.ImplementationsDeployment.OptimismPortalImplAddress = impls.OptimismPortal
-	st.ImplementationsDeployment.SystemConfigImplAddress = impls.SystemConfig
-	st.ImplementationsDeployment.L1CrossDomainMessengerImplAddress = impls.L1CrossDomainMessenger
-	st.ImplementationsDeployment.L1ERC721BridgeImplAddress = impls.L1ERC721Bridge
-	st.ImplementationsDeployment.L1StandardBridgeImplAddress = impls.L1StandardBridge
-	st.ImplementationsDeployment.OptimismMintableERC20FactoryImplAddress = impls.OptimismMintableERC20Factory
-	st.ImplementationsDeployment.DisputeGameFactoryImplAddress = impls.DisputeGameFactory
-	st.ImplementationsDeployment.MipsSingletonAddress = impls.MipsSingleton
-	st.ImplementationsDeployment.PreimageOracleSingletonAddress = impls.PreimageOracleSingleton
+	var impls opcm.ReadImplementationAddressesOutput
+	if env.UseForge {
+		lgr.Info("using Forge for ReadImplementationAddresses")
+		forgeCaller := opcm.NewReadImplementationAddressesForgeCaller(env.ForgeClient)
+		forgeOpts := []string{
+			"--rpc-url", env.L1RPCUrl,
+		}
+		impls, _, err = forgeCaller(env.Context, readInput, forgeOpts...)
+		if err != nil {
+			return fmt.Errorf("failed to run ReadImplementationAddresses with Forge: %w", err)
+		}
+	} else {
+		readImplementations, err := opcm.NewReadImplementationAddressesScript(env.L1ScriptHost)
+		if err != nil {
+			return fmt.Errorf("failed to load ReadImplementationAddresses script: %w", err)
+		}
+
+		impls, err = readImplementations.Run(readInput)
+		if err != nil {
+			return fmt.Errorf("failed to run ReadImplementationAddresses script: %w", err)
+		}
+	}
+
+	st.Chains = append(st.Chains, makeChainState(chainID, impls, dco))
+
+	st.ImplementationsDeployment.DelayedWethImpl = impls.DelayedWETH
+	st.ImplementationsDeployment.OptimismPortalImpl = impls.OptimismPortal
+	st.ImplementationsDeployment.OptimismPortalInteropImpl = impls.OptimismPortalInterop
+	st.ImplementationsDeployment.EthLockboxImpl = impls.EthLockbox
+	st.ImplementationsDeployment.SystemConfigImpl = impls.SystemConfig
+	st.ImplementationsDeployment.AnchorStateRegistryImpl = impls.AnchorStateRegistry
+	st.ImplementationsDeployment.L1CrossDomainMessengerImpl = impls.L1CrossDomainMessenger
+	st.ImplementationsDeployment.L1Erc721BridgeImpl = impls.L1ERC721Bridge
+	st.ImplementationsDeployment.L1StandardBridgeImpl = impls.L1StandardBridge
+	st.ImplementationsDeployment.OptimismMintableErc20FactoryImpl = impls.OptimismMintableERC20Factory
+	st.ImplementationsDeployment.DisputeGameFactoryImpl = impls.DisputeGameFactory
+	st.ImplementationsDeployment.MipsImpl = impls.MipsSingleton
+	st.ImplementationsDeployment.PreimageOracleImpl = impls.PreimageOracleSingleton
+	st.ImplementationsDeployment.FaultDisputeGameImpl = impls.FaultDisputeGame
+	st.ImplementationsDeployment.PermissionedDisputeGameImpl = impls.PermissionedDisputeGame
+	st.ImplementationsDeployment.OpcmDeployerImpl = impls.OpcmDeployer
+	st.ImplementationsDeployment.OpcmGameTypeAdderImpl = impls.OpcmGameTypeAdder
+	st.ImplementationsDeployment.OpcmUpgraderImpl = impls.OpcmUpgrader
+	st.ImplementationsDeployment.OpcmInteropMigratorImpl = impls.OpcmInteropMigrator
+	st.ImplementationsDeployment.OpcmStandardValidatorImpl = impls.OpcmStandardValidator
 
 	return nil
 }
 
-func makeDCIV160(intent *state.Intent, thisIntent *state.ChainIntent, chainID common.Hash, st *state.State) (opcm.DeployOPChainInputV160, error) {
+func makeDCI(intent *state.Intent, thisIntent *state.ChainIntent, chainID common.Hash, st *state.State) (opcm.DeployOPChainInput, error) {
 	proofParams, err := jsonutil.MergeJSON(
 		state.ChainProofParams{
 			DisputeGameType:         standard.DisputeGameType,
@@ -103,31 +135,22 @@ func makeDCIV160(intent *state.Intent, thisIntent *state.ChainIntent, chainID co
 		thisIntent.DeployOverrides,
 	)
 	if err != nil {
-		return opcm.DeployOPChainInputV160{}, fmt.Errorf("error merging proof params from overrides: %w", err)
+		return opcm.DeployOPChainInput{}, fmt.Errorf("error merging proof params from overrides: %w", err)
 	}
 
-	startingAnchorRoots := opcm.PermissionedGameStartingAnchorRoots
-	if len(thisIntent.AdditionalDisputeGames) > 0 {
-		anchorRoots := []opcm.StartingAnchorRoot{
-			opcm.DefaultStartingAnchorRoot,
+	// Select which OPCM to use based on dev feature flag
+	opcmAddr := st.ImplementationsDeployment.OpcmImpl
+	if devFeatureBitmap, ok := intent.GlobalDeployOverrides["devFeatureBitmap"].(common.Hash); ok {
+		opcmV2Flag := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000010000")
+		if isDevFeatureEnabled(devFeatureBitmap, opcmV2Flag) {
+			opcmAddr = st.ImplementationsDeployment.OpcmV2Impl
 		}
-
-		for _, game := range thisIntent.AdditionalDisputeGames {
-			anchorRoots = append(anchorRoots, opcm.StartingAnchorRoot{
-				GameType:      game.DisputeGameType,
-				Root:          game.StartingAnchorRoot,
-				L2BlockNumber: common.Big0,
-			})
-		}
-
-		encoded, err := opcm.EncodeStartingAnchorRoots(anchorRoots)
-		if err != nil {
-			return opcm.DeployOPChainInputV160{}, fmt.Errorf("error encoding starting anchor roots: %w", err)
-		}
-		startingAnchorRoots = encoded
+	}
+	if opcmAddr == (common.Address{}) {
+		return opcm.DeployOPChainInput{}, fmt.Errorf("OPCM implementation is not deployed")
 	}
 
-	return opcm.DeployOPChainInputV160{
+	return opcm.DeployOPChainInput{
 		OpChainProxyAdminOwner:       thisIntent.Roles.L1ProxyAdminOwner,
 		SystemConfigOwner:            thisIntent.Roles.SystemConfigOwner,
 		Batcher:                      thisIntent.Roles.Batcher,
@@ -137,50 +160,51 @@ func makeDCIV160(intent *state.Intent, thisIntent *state.ChainIntent, chainID co
 		BasefeeScalar:                standard.BasefeeScalar,
 		BlobBaseFeeScalar:            standard.BlobBaseFeeScalar,
 		L2ChainId:                    chainID.Big(),
-		Opcm:                         st.ImplementationsDeployment.OpcmAddress,
+		Opcm:                         opcmAddr,
 		SaltMixer:                    st.Create2Salt.String(), // passing through salt generated at state initialization
-		GasLimit:                     standard.GasLimit,
+		GasLimit:                     thisIntent.GasLimit,
 		DisputeGameType:              proofParams.DisputeGameType,
 		DisputeAbsolutePrestate:      proofParams.DisputeAbsolutePrestate,
-		DisputeMaxGameDepth:          proofParams.DisputeMaxGameDepth,
-		DisputeSplitDepth:            proofParams.DisputeSplitDepth,
+		DisputeMaxGameDepth:          new(big.Int).SetUint64(proofParams.DisputeMaxGameDepth),
+		DisputeSplitDepth:            new(big.Int).SetUint64(proofParams.DisputeSplitDepth),
 		DisputeClockExtension:        proofParams.DisputeClockExtension,   // 3 hours (input in seconds)
 		DisputeMaxClockDuration:      proofParams.DisputeMaxClockDuration, // 3.5 days (input in seconds)
 		AllowCustomDisputeParameters: proofParams.DangerouslyAllowCustomDisputeParameters,
-		StartingAnchorRoots:          startingAnchorRoots,
+		OperatorFeeScalar:            thisIntent.OperatorFeeScalar,
+		OperatorFeeConstant:          thisIntent.OperatorFeeConstant,
+		SuperchainConfig:             st.SuperchainDeployment.SuperchainConfigProxy,
+		UseCustomGasToken:            thisIntent.IsCustomGasTokenEnabled(),
 	}, nil
 }
 
-func makeDCIIsthmus(intent *state.Intent, thisIntent *state.ChainIntent, chainID common.Hash, st *state.State) (opcm.DeployOPChainInputIsthmus, error) {
-	dci, err := makeDCIV160(intent, thisIntent, chainID, st)
-	if err != nil {
-		return opcm.DeployOPChainInputIsthmus{}, fmt.Errorf("error making deploy OP chain input: %w", err)
+func makeChainState(chainID common.Hash, impls opcm.ReadImplementationAddressesOutput, dco opcm.DeployOPChainOutput) *state.ChainState {
+	opChainContracts := addresses.OpChainContracts{}
+	opChainContracts.OpChainProxyAdminImpl = dco.OpChainProxyAdmin
+	opChainContracts.AddressManagerImpl = dco.AddressManager
+	opChainContracts.L1Erc721BridgeProxy = dco.L1ERC721BridgeProxy
+	opChainContracts.SystemConfigProxy = dco.SystemConfigProxy
+	opChainContracts.OptimismMintableErc20FactoryProxy = dco.OptimismMintableERC20FactoryProxy
+	opChainContracts.L1StandardBridgeProxy = dco.L1StandardBridgeProxy
+	opChainContracts.L1CrossDomainMessengerProxy = dco.L1CrossDomainMessengerProxy
+	opChainContracts.OptimismPortalProxy = dco.OptimismPortalProxy
+	opChainContracts.EthLockboxProxy = dco.EthLockboxProxy
+	opChainContracts.DisputeGameFactoryProxy = dco.DisputeGameFactoryProxy
+	opChainContracts.AnchorStateRegistryProxy = dco.AnchorStateRegistryProxy
+	opChainContracts.FaultDisputeGameImpl = dco.FaultDisputeGame
+	opChainContracts.PermissionedDisputeGameImpl = dco.PermissionedDisputeGame
+	opChainContracts.DelayedWethPermissionedGameProxy = dco.DelayedWETHPermissionedGameProxy
+	opChainContracts.DelayedWethPermissionlessGameProxy = dco.DelayedWETHPermissionlessGameProxy
+
+	if (impls.PermissionedDisputeGame != common.Address{}) {
+		opChainContracts.PermissionedDisputeGameImpl = impls.PermissionedDisputeGame
+	}
+	if (impls.FaultDisputeGame != common.Address{}) {
+		opChainContracts.FaultDisputeGameImpl = impls.FaultDisputeGame
 	}
 
-	return opcm.DeployOPChainInputIsthmus{
-		DeployOPChainInputV160: dci,
-		SystemConfigFeeAdmin:   common.Address{'D', 'E', 'A', 'D'},
-	}, nil
-}
-
-func makeChainState(chainID common.Hash, dco opcm.DeployOPChainOutput) *state.ChainState {
 	return &state.ChainState{
-		ID:                                        chainID,
-		ProxyAdminAddress:                         dco.OpChainProxyAdmin,
-		AddressManagerAddress:                     dco.AddressManager,
-		L1ERC721BridgeProxyAddress:                dco.L1ERC721BridgeProxy,
-		SystemConfigProxyAddress:                  dco.SystemConfigProxy,
-		OptimismMintableERC20FactoryProxyAddress:  dco.OptimismMintableERC20FactoryProxy,
-		L1StandardBridgeProxyAddress:              dco.L1StandardBridgeProxy,
-		L1CrossDomainMessengerProxyAddress:        dco.L1CrossDomainMessengerProxy,
-		OptimismPortalProxyAddress:                dco.OptimismPortalProxy,
-		DisputeGameFactoryProxyAddress:            dco.DisputeGameFactoryProxy,
-		AnchorStateRegistryProxyAddress:           dco.AnchorStateRegistryProxy,
-		AnchorStateRegistryImplAddress:            dco.AnchorStateRegistryImpl,
-		FaultDisputeGameAddress:                   dco.FaultDisputeGame,
-		PermissionedDisputeGameAddress:            dco.PermissionedDisputeGame,
-		DelayedWETHPermissionedGameProxyAddress:   dco.DelayedWETHPermissionedGameProxy,
-		DelayedWETHPermissionlessGameProxyAddress: dco.DelayedWETHPermissionlessGameProxy,
+		ID:               chainID,
+		OpChainContracts: opChainContracts,
 	}
 }
 
@@ -192,4 +216,15 @@ func shouldDeployOPChain(st *state.State, chainID common.Hash) bool {
 	}
 
 	return true
+}
+
+// isDevFeatureEnabled checks if a specific development feature is enabled in a feature bitmap.
+// This mirrors the function in devfeatures.go to avoid import cycles.
+func isDevFeatureEnabled(bitmap, flag common.Hash) bool {
+	b := new(big.Int).SetBytes(bitmap[:])
+	f := new(big.Int).SetBytes(flag[:])
+
+	featuresIsNonZero := f.Cmp(big.NewInt(0)) != 0
+	bitmapContainsFeatures := new(big.Int).And(b, f).Cmp(f) == 0
+	return featuresIsNonZero && bitmapContainsFeatures
 }

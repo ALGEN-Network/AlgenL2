@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum-optimism/optimism/op-service/txmgr"
 	"github.com/ethereum/go-ethereum/common"
@@ -174,6 +175,10 @@ func (s *stubTxMgr) sentCount() int {
 	return len(s.sending)
 }
 
+func (s *stubTxMgr) ChainID() eth.ChainID {
+	panic("unsupported")
+}
+
 func (s *stubTxMgr) From() common.Address {
 	panic("unsupported")
 }
@@ -189,6 +194,6 @@ func (s *stubTxMgr) API() rpc.API {
 func (s *stubTxMgr) Close() {
 }
 
-func (s *stubTxMgr) SuggestGasPriceCaps(context.Context) (*big.Int, *big.Int, *big.Int, error) {
+func (s *stubTxMgr) SuggestGasPriceCaps(context.Context) (*big.Int, *big.Int, *big.Int, *big.Int, error) {
 	panic("unimplemented")
 }

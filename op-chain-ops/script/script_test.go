@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/params"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script/addresses"
 
@@ -345,4 +350,179 @@ func setupMockRPC(config forkConfig) *MockRPCClient {
 		}).Return(nil)
 
 	return mockRPC
+}
+
+func TestCallPanicBehavior(t *testing.T) {
+	getHostEVM := func() (*Host, *mockEVM) {
+		evm := new(mockEVM)
+		host := &Host{
+			env:      evm,
+			chainCfg: new(params.ChainConfig),
+		}
+		evm.On("Context").Return(new(vm.BlockContext))
+		evm.On("StateDB").Return(new(state.StateDB))
+		return host, evm
+	}
+
+	t.Run("panic with revision id 1 error", func(t *testing.T) {
+		host, evm := getHostEVM()
+		evm.On(
+			"Call",
+			common.Address{'I'},
+			common.Address{'O'},
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+		).Panic("revision id 1 cannot be reverted")
+
+		ret, gas, err := host.Call(common.Address{'I'}, common.Address{'O'}, []byte{}, 0, nil)
+		require.Nil(t, ret)
+		require.Equal(t, uint64(0), gas)
+		require.ErrorContains(t, err, "execution reverted")
+		evm.AssertExpectations(t)
+	})
+
+	t.Run("panic with some other message", func(t *testing.T) {
+		host, evm := getHostEVM()
+		evm.On(
+			"Call",
+			common.Address{'I'},
+			common.Address{'O'},
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+		).Panic("honk")
+
+		require.PanicsWithValue(t, "honk", func() {
+			_, _, _ = host.Call(common.Address{'I'}, common.Address{'O'}, []byte{}, 0, nil)
+		})
+		evm.AssertExpectations(t)
+	})
+
+	t.Run("preserves evmRevertErrors", func(t *testing.T) {
+		host, evm := getHostEVM()
+		evm.On(
+			"Call",
+			common.Address{'I'},
+			common.Address{'O'},
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+		).Panic("revision id 1 cannot be reverted")
+		errMsg := "max code size exceeded"
+		host.evmRevertErr = errors.New(errMsg)
+
+		ret, gas, err := host.Call(common.Address{'I'}, common.Address{'O'}, []byte{}, 0, nil)
+		require.Nil(t, ret)
+		require.Equal(t, uint64(0), gas)
+		require.ErrorContains(t, err, errMsg)
+		evm.AssertExpectations(t)
+	})
+}
+
+func TestScriptErrorHandling(t *testing.T) {
+	logger := testlog.Logger(t, log.LevelInfo)
+	af := foundry.OpenArtifactsDir("./testdata/test-artifacts")
+
+	scriptContext := DefaultContext
+	h := NewHost(logger, af, nil, scriptContext)
+	require.NoError(t, h.EnableCheats())
+
+	addr, err := h.LoadContract("ScriptExample.s.sol", "ErrorTester")
+	require.NoError(t, err)
+	h.AllowCheatcodes(addr)
+
+	tests := []struct {
+		name     string
+		method   string
+		expError string
+	}{
+		{
+			"custom error",
+			"customErr()",
+			"0xa1c9aedc",
+		},
+		{
+			"revert message",
+			"revertMsg()",
+			"beep",
+		},
+		{
+			"non existent method",
+			"nonExistentMethod()",
+			": execution reverted",
+		},
+		{
+			"nested call",
+			"nested()",
+			"honk",
+		},
+		{
+			"try/catch",
+			"tryCatch()",
+			"caught",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := bytes4(tt.method)
+			_, _, err := h.Call(scriptContext.Sender, addr, input[:], DefaultFoundryGasLimit, uint256.NewInt(0))
+			require.ErrorContains(t, err, tt.expError)
+			require.Nil(t, h.evmRevertErr)
+		})
+	}
+}
+
+func TestWithNoMaxCodeSize(t *testing.T) {
+	logger := testlog.Logger(t, log.LevelInfo)
+	af := foundry.OpenArtifactsDir("./testdata/test-artifacts")
+	scriptContext := DefaultContext
+	deployer := scriptContext.Sender
+
+	// Create init code that deploys a contract with >24KB runtime code
+	// Init code structure:
+	// PUSH2 0x6400 (25600 bytes = 25KB)
+	// PUSH1 0x0c (offset where runtime code starts)
+	// PUSH1 0x00 (memory destination)
+	// CODECOPY
+	// PUSH2 0x6400 (size to return)
+	// PUSH1 0x00 (memory offset)
+	// RETURN
+	runtimeSize := 25 * 1024 // 25KB runtime code
+	initCode := []byte{
+		0x61, 0x64, 0x00, // PUSH2 0x6400
+		0x60, 0x0c, // PUSH1 0x0c (12 bytes - length of this init code)
+		0x60, 0x00, // PUSH1 0x00
+		0x39,             // CODECOPY
+		0x61, 0x64, 0x00, // PUSH2 0x6400
+		0x60, 0x00, // PUSH1 0x00
+		0xf3, // RETURN
+	}
+	// Append runtime code (can be any data, we'll use zeros)
+	runtimeCode := make([]byte, runtimeSize)
+	largeBytecode := append(initCode, runtimeCode...)
+
+	t.Run("WithNoMaxCodeSize allows large contracts", func(t *testing.T) {
+		h := NewHost(logger, af, nil, scriptContext, WithNoMaxCodeSize())
+		require.True(t, h.noMaxCodeSize, "noMaxCodeSize flag should be set")
+		require.True(t, h.env.Config().NoMaxCodeSize, "EVM should have NoMaxCodeSize enabled")
+
+		addr, err := h.Create(deployer, largeBytecode)
+		require.NoError(t, err, "Should deploy large contract when NoMaxCodeSize is enabled")
+		require.NotEqual(t, common.Address{}, addr, "Should return valid address")
+
+		// Verify the code was actually deployed
+		code := h.GetCode(addr)
+		require.NotEmpty(t, code, "Contract code should be deployed")
+	})
+
+	t.Run("Default behavior rejects large contracts", func(t *testing.T) {
+		h := NewHost(logger, af, nil, scriptContext)
+		require.False(t, h.noMaxCodeSize, "noMaxCodeSize flag should be false by default")
+		require.False(t, h.env.Config().NoMaxCodeSize, "EVM should enforce max code size by default")
+
+		_, err := h.Create(deployer, largeBytecode)
+		require.Error(t, err, "Should reject large contract by default")
+		require.Contains(t, err.Error(), "max code size", "Error should mention max code size")
+	})
 }

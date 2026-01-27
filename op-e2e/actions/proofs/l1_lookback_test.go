@@ -6,6 +6,7 @@ import (
 	actionsHelpers "github.com/ethereum-optimism/optimism/op-e2e/actions/helpers"
 	"github.com/ethereum-optimism/optimism/op-e2e/actions/proofs/helpers"
 	"github.com/ethereum-optimism/optimism/op-program/client/claim"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/require"
@@ -42,10 +43,10 @@ func runL1LookbackTest(gt *testing.T, testCfg *helpers.TestCfg[any]) {
 
 	// Ensure that the safe head has advanced to `NumL2Blocks`.
 	l2SafeHead := env.Engine.L2Chain().CurrentSafeBlock()
-	require.EqualValues(t, numL2Blocks, l2SafeHead.Number.Uint64())
+	require.EqualValues(t, numL2Blocks, bigs.Uint64Strict(l2SafeHead.Number))
 
 	// Run the FPP on the configured L2 block.
-	env.RunFaultProofProgram(t, numL2Blocks/2, testCfg.CheckResult, testCfg.InputParams...)
+	env.RunFaultProofProgramFromGenesis(t, numL2Blocks/2, testCfg.CheckResult, testCfg.InputParams...)
 }
 
 func runL1LookbackTest_ReopenChannel(gt *testing.T, testCfg *helpers.TestCfg[any]) {
@@ -73,13 +74,13 @@ func runL1LookbackTest_ReopenChannel(gt *testing.T, testCfg *helpers.TestCfg[any
 	env.Miner.ActL1SafeNext(t)
 
 	// Re-submit the first L2 block frame w/ different transaction data.
-	err := env.Batcher.Buffer(t, func(block *types.Block) *types.Block {
+	err := env.Batcher.Buffer(t, actionsHelpers.WithBlockModifier(func(block *types.Block) *types.Block {
 		env.Bob.L2.ActResetTxOpts(t)
 		env.Bob.L2.ActSetTxToAddr(&env.Dp.Addresses.Mallory)
 		tx := env.Bob.L2.MakeTransaction(t)
 		block.Transactions()[1] = tx
 		return block
-	})
+	}))
 	require.NoError(t, err)
 	env.Batcher.ActL2BatchSubmit(t)
 
@@ -119,10 +120,10 @@ func runL1LookbackTest_ReopenChannel(gt *testing.T, testCfg *helpers.TestCfg[any
 
 	// Ensure that the safe head has advanced to `NumL2Blocks`.
 	l2SafeHead := env.Engine.L2Chain().CurrentSafeBlock()
-	require.EqualValues(t, numL2Blocks, l2SafeHead.Number.Uint64())
+	require.EqualValues(t, numL2Blocks, bigs.Uint64Strict(l2SafeHead.Number))
 
 	// Run the FPP on the configured L2 block.
-	env.RunFaultProofProgram(t, numL2Blocks/2, testCfg.CheckResult, testCfg.InputParams...)
+	env.RunFaultProofProgramFromGenesis(t, numL2Blocks/2, testCfg.CheckResult, testCfg.InputParams...)
 }
 
 func Test_ProgramAction_L1Lookback(gt *testing.T) {

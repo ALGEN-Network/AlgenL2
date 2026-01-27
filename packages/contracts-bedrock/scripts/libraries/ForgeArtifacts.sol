@@ -152,8 +152,6 @@ library ForgeArtifacts {
 
     /// @notice Pulls the `_initialized` storage slot information from the Forge artifacts for a given contract.
     function getInitializedSlot(string memory _contractName) internal returns (StorageSlot memory slot_) {
-        string memory storageLayout = getStorageLayout(_contractName);
-
         // FaultDisputeGame and PermissionedDisputeGame use a different name for the initialized storage slot.
         string memory slotName = "_initialized";
         string memory slotType = "t_uint8";
@@ -162,6 +160,7 @@ library ForgeArtifacts {
             slotType = "t_bool";
         }
 
+        string memory storageLayout = getStorageLayout(_contractName);
         bytes memory rawSlot = vm.parseJson(
             Process.bash(
                 string.concat(
@@ -186,12 +185,47 @@ library ForgeArtifacts {
         });
     }
 
+    /// @notice Returns the storage slot for a given contract and slot name
+    function getSlot(
+        string memory _contractName,
+        string memory _slotName
+    )
+        internal
+        returns (StorageSlot memory slot_)
+    {
+        string memory storageLayout = getStorageLayout(_contractName);
+        bytes memory rawSlot = vm.parseJson(
+            Process.bash(
+                string.concat("echo '", storageLayout, "' | jq '.storage[] | select(.label == \"", _slotName, "\")'")
+            )
+        );
+        ForgeStorageSlot memory slot = abi.decode(rawSlot, (ForgeStorageSlot));
+        slot_ = StorageSlot({
+            astId: slot.astId,
+            _contract: slot._contract,
+            label: slot.label,
+            offset: slot.offset,
+            slot: vm.parseUint(slot.slot),
+            _type: slot._type
+        });
+    }
+
     /// @notice Returns whether or not a contract is initialized.
     ///         Needs the name to get the storage layout.
     function isInitialized(string memory _name, address _address) internal returns (bool initialized_) {
         StorageSlot memory slot = ForgeArtifacts.getInitializedSlot(_name);
         bytes32 slotVal = vm.load(_address, bytes32(slot.slot));
         initialized_ = uint8((uint256(slotVal) >> (slot.offset * 8)) & 0xFF) != 0;
+    }
+
+    /// @notice Checks if a contract is initialized using OpenZeppelin v5 namespaced storage pattern.
+    ///         OZ v5 storage slot: keccak256(abi.encode(uint256(keccak256("openzeppelin.storage.Initializable")) - 1))
+    /// & ~bytes32(uint256(0xff))
+    function isInitializedV5(address _addr) internal view returns (bool) {
+        bytes32 INITIALIZABLE_STORAGE_SLOT = 0xf0c57e16840df040f15088dc2f81fe391c3923bec73e23a9662efc9c229c6a00;
+        bytes32 slotVal = vm.load(_addr, INITIALIZABLE_STORAGE_SLOT);
+        // In OZ v5, byte 0 is _initialized, byte 1 is _initializing
+        return uint8(uint256(slotVal) & 0xFF) != 0;
     }
 
     /// @notice Returns the names of all contracts in a given directory.

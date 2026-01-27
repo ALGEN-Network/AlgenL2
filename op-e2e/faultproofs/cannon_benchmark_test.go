@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	op_e2e "github.com/ethereum-optimism/optimism/op-e2e"
 	"github.com/ethereum-optimism/optimism/op-e2e/config"
 	"github.com/ethereum-optimism/optimism/op-e2e/system/e2esys"
 
@@ -27,24 +26,19 @@ import (
 
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/utils"
+	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-e2e/bindings"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/wait"
-	"github.com/ethereum-optimism/optimism/op-service/predeploys"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
-func TestBenchmarkCannonFPP_Standard(t *testing.T) {
-	testBenchmarkCannonFPP(t, config.AllocTypeStandard)
-}
-
-func TestBenchmarkCannonFPP_Multithreaded(t *testing.T) {
-	testBenchmarkCannonFPP(t, config.AllocTypeMTCannon)
+func TestBenchmarkCannonFPP(t *testing.T) {
+	t.Skip("TODO(client-pod#906): Compare total witness size for assertions against pages allocated by the VM")
+	RunTestAcrossVmTypes(t, testBenchmarkCannonFPP)
 }
 
 func testBenchmarkCannonFPP(t *testing.T, allocType config.AllocType) {
-	t.Skip("TODO(client-pod#906): Compare total witness size for assertions against pages allocated by the VM")
-
-	op_e2e.InitParallel(t, op_e2e.UsesCannon)
 	ctx := context.Background()
 	cfg := e2esys.DefaultSystemConfig(t, e2esys.WithAllocType(allocType))
 	// We don't need a verifier - just the sequencer is enough
@@ -73,7 +67,7 @@ func testBenchmarkCannonFPP(t *testing.T, allocType config.AllocType) {
 	newContracts := createBigContracts(ctx, t, cfg, l2Seq, cfg.Secrets.Alice, numCreates)
 	receipt := callBigContracts(ctx, t, cfg, l2Seq, cfg.Secrets.Alice, newContracts)
 
-	t.Log("Capture the latest L2 head that preceedes contract creations as agreed starting point")
+	t.Log("Capture the latest L2 head that precedes contract creations as agreed starting point")
 	agreedBlock, err := l2Seq.BlockByNumber(ctx, new(big.Int).Sub(receipt.BlockNumber, big.NewInt(1)))
 	require.NoError(t, err)
 	agreedL2Output, err := rollupClient.OutputAtBlock(ctx, agreedBlock.NumberU64())
@@ -83,22 +77,22 @@ func testBenchmarkCannonFPP(t *testing.T, allocType config.AllocType) {
 
 	t.Log("Determine L2 claim")
 	l2ClaimBlockNumber := receipt.BlockNumber
-	l2Output, err := rollupClient.OutputAtBlock(ctx, l2ClaimBlockNumber.Uint64())
+	l2Output, err := rollupClient.OutputAtBlock(ctx, bigs.Uint64Strict(l2ClaimBlockNumber))
 	require.NoError(t, err, "could not get expected output")
 	l2Claim := l2Output.OutputRoot
 
 	t.Log("Determine L1 head that includes all batches required for L2 claim block")
-	require.NoError(t, wait.ForSafeBlock(ctx, rollupClient, l2ClaimBlockNumber.Uint64()))
+	require.NoError(t, wait.ForSafeBlock(ctx, rollupClient, bigs.Uint64Strict(l2ClaimBlockNumber)))
 	l1HeadBlock, err := l1Client.BlockByNumber(ctx, nil)
 	require.NoError(t, err, "get l1 head block")
 	l1Head := l1HeadBlock.Hash()
 
 	inputs := utils.LocalGameInputs{
-		L1Head:        l1Head,
-		L2Head:        l2Head,
-		L2Claim:       common.Hash(l2Claim),
-		L2OutputRoot:  common.Hash(l2OutputRoot),
-		L2BlockNumber: l2ClaimBlockNumber,
+		L1Head:           l1Head,
+		L2Head:           l2Head,
+		L2Claim:          common.Hash(l2Claim),
+		L2OutputRoot:     common.Hash(l2OutputRoot),
+		L2SequenceNumber: l2ClaimBlockNumber,
 	}
 	debugfile := path.Join(t.TempDir(), "debug.json")
 	runCannon(t, ctx, sys, inputs, "--debug-info", debugfile)

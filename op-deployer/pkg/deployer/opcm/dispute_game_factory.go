@@ -8,9 +8,9 @@ import (
 type SetDisputeGameImplInput struct {
 	Factory             common.Address
 	Impl                common.Address
-	Portal              common.Address
 	AnchorStateRegistry common.Address
 	GameType            uint32
+	GameArgs            []byte
 }
 
 func SetDisputeGameImpl(

@@ -7,6 +7,7 @@ import (
 	actionsHelpers "github.com/ethereum-optimism/optimism/op-e2e/actions/helpers"
 	"github.com/ethereum-optimism/optimism/op-e2e/actions/proofs/helpers"
 	"github.com/ethereum-optimism/optimism/op-program/client/claim"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/require"
 )
@@ -99,7 +100,7 @@ func Test_ProgramAction_HoloceneBatches(gt *testing.T) {
 		}
 
 		targetHeadNumber := max(testCfg.Custom.blocks)
-		for env.Engine.L2Chain().CurrentBlock().Number.Uint64() < uint64(targetHeadNumber) {
+		for bigs.Uint64Strict(env.Engine.L2Chain().CurrentBlock().Number) < uint64(targetHeadNumber) {
 			env.Sequencer.ActL2StartBlock(t)
 			// Send an L2 tx
 			env.Alice.L2.ActResetTxOpts(t)
@@ -129,7 +130,7 @@ func Test_ProgramAction_HoloceneBatches(gt *testing.T) {
 		testCfg.Custom.RequireExpectedProgressAndLogs(t, l2SafeHead, isHolocene, env.Engine, env.Logs)
 		t.Log("Safe head progressed as expected", "l2SafeHeadNumber", l2SafeHead.Number)
 
-		env.RunFaultProofProgram(t, l2SafeHead.Number, testCfg.CheckResult, testCfg.InputParams...)
+		env.RunFaultProofProgramFromGenesis(t, l2SafeHead.Number, testCfg.CheckResult, testCfg.InputParams...)
 	}
 
 	matrix := helpers.NewMatrix[testCase]()

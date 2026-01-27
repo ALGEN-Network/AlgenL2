@@ -15,8 +15,8 @@ var asPattern = regexp.MustCompile(`(\S+)\s+as\s+(\S+)`)
 
 func main() {
 	if _, err := common.ProcessFilesGlob(
-		[]string{"src/**/*.sol", "scripts/**/*.sol", "test/**/*.sol"},
-		[]string{},
+		[]string{"src/**/*.sol", "scripts/**/*.sol", "test/**/*.sol", "interfaces/**/*.sol"},
+		[]string{"src/dispute/lib/Types.sol"},
 		processFile,
 	); err != nil {
 		fmt.Printf("error: %v\n", err)
@@ -74,16 +74,45 @@ func isImportUsed(imp, content string) bool {
 	wordPattern := fmt.Sprintf(`\b%s\b`, regexp.QuoteMeta(imp))
 	scanner := bufio.NewScanner(strings.NewReader(content))
 
+	importOpen := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(strings.TrimSpace(line), "//") || strings.HasPrefix(strings.TrimSpace(line), "/*") || strings.HasPrefix(strings.TrimSpace(line), "*") || strings.HasPrefix(strings.TrimSpace(line), "*/") {
 			continue
 		}
-		if strings.Contains(line, "import") {
+		// Split the line at any comment markers and only process the code part
+		line = strings.Split(line, "//")[0]
+		line = strings.Split(line, "/*")[0]
+
+		if importOpen {
+			if strings.Contains(line, "}") {
+				importOpen = false
+			}
+			continue
+		}
+		if strings.Contains(line, "import {") {
+			if !strings.Contains(line, "}") {
+				importOpen = true
+			}
 			continue
 		}
 
 		if matched, _ := regexp.MatchString(wordPattern, line); matched {
+			// Check if all occurrences of imp are within quotes
+			allWithinQuotes := true
+			inQuotes := false
+			for i := 0; i < len(line); i++ {
+				if line[i] == '"' || line[i] == '\'' {
+					inQuotes = !inQuotes
+				} else if !inQuotes && i+len(imp) <= len(line) && line[i:i+len(imp)] == imp {
+					// Found imp outside quotes
+					allWithinQuotes = false
+					break
+				}
+			}
+			if allWithinQuotes {
+				continue
+			}
 			return true
 		}
 	}

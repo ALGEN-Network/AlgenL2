@@ -3,20 +3,16 @@ package pipeline
 import (
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
-	"os"
-	"strings"
 
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
 
 	"github.com/ethereum/go-ethereum/common"
 )
-
-var ErrRefusingToDeployTaggedReleaseWithoutOPCM = errors.New("refusing to deploy tagged release without OPCM")
 
 func IsSupportedStateVersion(version int) bool {
 	return version == 1
@@ -30,35 +26,39 @@ func InitLiveStrategy(ctx context.Context, env *Env, intent *state.Intent, st *s
 		return err
 	}
 
-	opcmAddress, opcmAddrErr := standard.ManagerImplementationAddrFor(intent.L1ChainID, intent.L1ContractsLocator.Tag)
-	hasPredeployedOPCM := opcmAddrErr == nil
-	isTag := intent.L1ContractsLocator.IsTag()
+	hasPredeployedOPCM := intent.OPCMAddress != nil
+	hasSuperchainConfigProxy := intent.SuperchainConfigProxy != nil
 
-	if isTag && hasPredeployedOPCM {
-		superCfg, err := standard.SuperchainFor(intent.L1ChainID)
+	if hasPredeployedOPCM || hasSuperchainConfigProxy {
+		if intent.SuperchainRoles != nil {
+			return fmt.Errorf("cannot set superchain roles when using predeployed OPCM or SuperchainConfig")
+		}
+
+		opcmAddr := common.Address{}
+		if hasPredeployedOPCM {
+			opcmAddr = *intent.OPCMAddress
+		}
+
+		superchainConfigAddr := common.Address{}
+		if hasSuperchainConfigProxy {
+			superchainConfigAddr = *intent.SuperchainConfigProxy
+		}
+
+		// The ReadSuperchainDeployment script (packages/contracts-bedrock/scripts/deploy/ReadSuperchainDeployment.s.sol)
+		// uses the OPCM's semver version (>= 7.0.0 indicates v2) to determine how to populate the superchain state:
+		// - OPCMv1 (< 7.0.0): Queries the OPCM contract to get SuperchainConfig and ProtocolVersions
+		// - OPCMv2 (>= 7.0.0): Uses the provided SuperchainConfigProxy address; ProtocolVersions is deprecated
+		superDeployment, superRoles, err := PopulateSuperchainState(env.L1ScriptHost, opcmAddr, superchainConfigAddr)
 		if err != nil {
-			return fmt.Errorf("error getting superchain config: %w", err)
+			return fmt.Errorf("error populating superchain state: %w", err)
 		}
+		st.SuperchainDeployment = superDeployment
+		st.SuperchainRoles = superRoles
 
-		proxyAdmin, err := standard.SuperchainProxyAdminAddrFor(intent.L1ChainID)
-		if err != nil {
-			return fmt.Errorf("error getting superchain proxy admin address: %w", err)
-		}
-
-		// Have to do this weird pointer thing below because the Superchain Registry defines its
-		// own Address type.
-		st.SuperchainDeployment = &state.SuperchainDeployment{
-			ProxyAdminAddress:            proxyAdmin,
-			ProtocolVersionsProxyAddress: common.Address(*superCfg.Config.ProtocolVersionsAddr),
-			SuperchainConfigProxyAddress: common.Address(*superCfg.Config.SuperchainConfigAddr),
-		}
-
-		st.ImplementationsDeployment = &state.ImplementationsDeployment{
-			OpcmAddress: opcmAddress,
-		}
-	} else if isTag && !hasPredeployedOPCM {
-		if err := displayWarning(); err != nil {
-			return err
+		if hasPredeployedOPCM && st.ImplementationsDeployment == nil {
+			st.ImplementationsDeployment = &addresses.ImplementationsContracts{
+				OpcmImpl: opcmAddr,
+			}
 		}
 	}
 
@@ -137,22 +137,33 @@ func immutableErr(field string, was, is any) error {
 	return fmt.Errorf("%s is immutable: was %v, is %v", field, was, is)
 }
 
-func displayWarning() error {
-	warning := strings.TrimPrefix(`
-####################### WARNING! WARNING WARNING! #######################
+// TODO(#18612): Remove OPCMAddress field when OPCMv1 gets deprecated
+// TODO(#18612): Remove ProtocolVersions fields when OPCMv1 gets deprecated
+func PopulateSuperchainState(host *script.Host, opcmAddr common.Address, superchainConfigProxy common.Address) (*addresses.SuperchainContracts, *addresses.SuperchainRoles, error) {
+	readScript, err := opcm.NewReadSuperchainDeploymentScript(host)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error generating read superchain deployment script: %w", err)
+	}
 
-You are deploying a tagged release to a chain with no pre-deployed OPCM.
-Due to a quirk of our contract version system, this can lead to deploying
-contracts containing unaudited or untested code. As a result, this 
-functionality is currently disabled.
+	out, err := readScript.Run(opcm.ReadSuperchainDeploymentInput{
+		OPCMAddress:           opcmAddr,
+		SuperchainConfigProxy: superchainConfigProxy,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("error reading superchain deployment: %w", err)
+	}
 
-We will fix this in an upcoming release.
-
-This process will now exit.
-
-####################### WARNING! WARNING WARNING! #######################
-`, "\n")
-
-	_, _ = fmt.Fprint(os.Stderr, warning)
-	return ErrRefusingToDeployTaggedReleaseWithoutOPCM
+	deployment := &addresses.SuperchainContracts{
+		SuperchainProxyAdminImpl: out.SuperchainProxyAdmin,
+		SuperchainConfigProxy:    out.SuperchainConfigProxy,
+		SuperchainConfigImpl:     out.SuperchainConfigImpl,
+		ProtocolVersionsProxy:    out.ProtocolVersionsProxy,
+		ProtocolVersionsImpl:     out.ProtocolVersionsImpl,
+	}
+	roles := &addresses.SuperchainRoles{
+		SuperchainProxyAdminOwner: out.SuperchainProxyAdminOwner,
+		SuperchainGuardian:        out.Guardian,
+		ProtocolVersionsOwner:     out.ProtocolVersionsOwner,
+	}
+	return deployment, roles, nil
 }

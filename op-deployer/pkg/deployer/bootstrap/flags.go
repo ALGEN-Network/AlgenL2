@@ -1,8 +1,6 @@
 package bootstrap
 
 import (
-	"errors"
-
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
@@ -12,29 +10,13 @@ import (
 
 const (
 	OutfileFlagName                         = "outfile"
-	ArtifactsLocatorFlagName                = "artifacts-locator"
 	WithdrawalDelaySecondsFlagName          = "withdrawal-delay-seconds"
 	MinProposalSizeBytesFlagName            = "min-proposal-size-bytes"
 	ChallengePeriodSecondsFlagName          = "challenge-period-seconds"
 	ProofMaturityDelaySecondsFlagName       = "proof-maturity-delay-seconds"
 	DisputeGameFinalityDelaySecondsFlagName = "dispute-game-finality-delay-seconds"
 	MIPSVersionFlagName                     = "mips-version"
-	VmFlagName                              = "vm"
-	GameKindFlagName                        = "game-kind"
-	GameTypeFlagName                        = "game-type"
-	AbsolutePrestateFlagName                = "absolute-prestate"
-	MaxGameDepthFlagName                    = "max-game-depth"
-	SplitDepthFlagName                      = "split-depth"
-	ClockExtensionFlagName                  = "clock-extension"
-	MaxClockDurationFlagName                = "max-clock-duration"
-	AnchorStateRegistryProxyFlagName        = "anchor-state-registry-proxy"
-	L2ChainIdFlagName                       = "l2-chain-id"
-	ProposerFlagName                        = "proposer"
-	ChallengerFlagName                      = "challenger"
-	PreimageOracleFlagName                  = "preimage-oracle"
-	ReleaseFlagName                         = "release"
-	DelayedWethProxyFlagName                = "delayed-weth-proxy"
-	DelayedWethImplFlagName                 = "delayed-weth-impl"
+	DevFeatureBitmapFlagName                = "dev-feature-bitmap"
 	ProxyOwnerFlagName                      = "proxy-owner"
 	SuperchainProxyAdminOwnerFlagName       = "superchain-proxy-admin-owner"
 	ProtocolVersionsOwnerFlagName           = "protocol-versions-owner"
@@ -50,11 +32,6 @@ var (
 		Usage:   "Output file. Use - for stdout.",
 		EnvVars: deployer.PrefixEnvVar("OUTFILE"),
 		Value:   "-",
-	}
-	ArtifactsLocatorFlag = &cli.StringFlag{
-		Name:    ArtifactsLocatorFlagName,
-		Usage:   "Locator for artifacts.",
-		EnvVars: deployer.PrefixEnvVar("ARTIFACTS_LOCATOR"),
 	}
 	WithdrawalDelaySecondsFlag = &cli.Uint64Flag{
 		Name:    WithdrawalDelaySecondsFlagName,
@@ -86,102 +63,41 @@ var (
 		EnvVars: deployer.PrefixEnvVar("DISPUTE_GAME_FINALITY_DELAY_SECONDS"),
 		Value:   standard.DisputeGameFinalityDelaySeconds,
 	}
+	DisputeMaxGameDepthFlag = &cli.Uint64Flag{
+		Name:    "dispute-max-game-depth",
+		Usage:   "Maximum depth of the dispute game tree (value as string). Defaults to the standard value.",
+		EnvVars: deployer.PrefixEnvVar("DISPUTE_MAX_GAME_DEPTH"),
+		Value:   standard.DisputeMaxGameDepth,
+	}
+	DisputeSplitDepthFlag = &cli.Uint64Flag{
+		Name:    "dispute-split-depth",
+		Usage:   "Depth at which the dispute game tree splits (value as string). Defaults to the standard value.",
+		EnvVars: deployer.PrefixEnvVar("DISPUTE_SPLIT_DEPTH"),
+		Value:   standard.DisputeSplitDepth,
+	}
+	DisputeClockExtensionFlag = &cli.Uint64Flag{
+		Name:    "dispute-clock-extension",
+		Usage:   "Clock extension in seconds for dispute game timing. Defaults to the standard value.",
+		EnvVars: deployer.PrefixEnvVar("DISPUTE_CLOCK_EXTENSION"),
+		Value:   standard.DisputeClockExtension,
+	}
+	DisputeMaxClockDurationFlag = &cli.Uint64Flag{
+		Name:    "dispute-max-clock-duration",
+		Usage:   "Maximum clock duration in seconds for dispute game timing. Defaults to the standard value.",
+		EnvVars: deployer.PrefixEnvVar("DISPUTE_MAX_CLOCK_DURATION"),
+		Value:   standard.DisputeMaxClockDuration,
+	}
 	MIPSVersionFlag = &cli.Uint64Flag{
 		Name:    MIPSVersionFlagName,
 		Usage:   "MIPS version.",
 		EnvVars: deployer.PrefixEnvVar("MIPS_VERSION"),
 		Value:   standard.MIPSVersion,
 	}
-	VmFlag = &cli.StringFlag{
-		Name:    VmFlagName,
-		Usage:   "VM contract address.",
-		EnvVars: deployer.PrefixEnvVar("VM"),
-	}
-	GameKindFlag = &cli.StringFlag{
-		Name:    GameKindFlagName,
-		Usage:   "Game kind (FaultDisputeGame or PermissionedDisputeGame).",
-		EnvVars: deployer.PrefixEnvVar("GAME_KIND"),
-		Value:   "FaultDisputeGame",
-	}
-	GameTypeFlag = &cli.StringFlag{
-		Name:    GameTypeFlagName,
-		Usage:   "Game type (integer or fractional).",
-		EnvVars: deployer.PrefixEnvVar("GAME_TYPE"),
-	}
-	AbsolutePrestateFlag = &cli.StringFlag{
-		Name:    AbsolutePrestateFlagName,
-		Usage:   "Absolute prestate.",
-		EnvVars: deployer.PrefixEnvVar("ABSOLUTE_PRESTATE"),
-		Value:   standard.DisputeAbsolutePrestate.Hex(),
-	}
-	MaxGameDepthFlag = &cli.Uint64Flag{
-		Name:    MaxGameDepthFlagName,
-		Usage:   "Max game depth.",
-		EnvVars: deployer.PrefixEnvVar("MAX_GAME_DEPTH"),
-		Value:   standard.DisputeMaxGameDepth,
-	}
-	SplitDepthFlag = &cli.Uint64Flag{
-		Name:    SplitDepthFlagName,
-		Usage:   "Split depth.",
-		EnvVars: deployer.PrefixEnvVar("SPLIT_DEPTH"),
-		Value:   standard.DisputeSplitDepth,
-	}
-	ClockExtensionFlag = &cli.Uint64Flag{
-		Name:    ClockExtensionFlagName,
-		Usage:   "Clock extension.",
-		EnvVars: deployer.PrefixEnvVar("CLOCK_EXTENSION"),
-		Value:   standard.DisputeClockExtension,
-	}
-	MaxClockDurationFlag = &cli.Uint64Flag{
-		Name:    MaxClockDurationFlagName,
-		Usage:   "Max clock duration.",
-		EnvVars: deployer.PrefixEnvVar("MAX_CLOCK_DURATION"),
-		Value:   standard.DisputeMaxClockDuration,
-	}
-	DelayedWethProxyFlag = &cli.StringFlag{
-		Name:    DelayedWethProxyFlagName,
-		Usage:   "Delayed WETH proxy.",
-		EnvVars: deployer.PrefixEnvVar("DELAYED_WETH_PROXY"),
-	}
-	DelayedWethImplFlag = &cli.StringFlag{
-		Name:    DelayedWethImplFlagName,
-		Usage:   "Delayed WETH implementation.",
-		EnvVars: deployer.PrefixEnvVar("DELAYED_WETH_IMPL"),
-		Value:   common.Address{}.Hex(),
-	}
-	AnchorStateRegistryProxyFlag = &cli.StringFlag{
-		Name:    AnchorStateRegistryProxyFlagName,
-		Usage:   "Anchor state registry proxy.",
-		EnvVars: deployer.PrefixEnvVar("ANCHOR_STATE_REGISTRY_PROXY"),
-	}
-	L2ChainIdFlag = &cli.Uint64Flag{
-		Name:    L2ChainIdFlagName,
-		Usage:   "L2 chain ID.",
-		EnvVars: deployer.PrefixEnvVar("L2_CHAIN_ID"),
-	}
-	ProposerFlag = &cli.StringFlag{
-		Name:    ProposerFlagName,
-		Usage:   "Proposer address (permissioned game only).",
-		EnvVars: deployer.PrefixEnvVar("PROPOSER"),
-		Value:   common.Address{}.Hex(),
-	}
-	ChallengerFlag = &cli.StringFlag{
-		Name:    ChallengerFlagName,
-		Usage:   "Challenger address (permissioned game only).",
-		EnvVars: deployer.PrefixEnvVar("CHALLENGER"),
-		Value:   common.Address{}.Hex(),
-	}
-	PreimageOracleFlag = &cli.StringFlag{
-		Name:    PreimageOracleFlagName,
-		Usage:   "Preimage oracle address.",
-		EnvVars: deployer.PrefixEnvVar("PREIMAGE_ORACLE"),
-		Value:   common.Address{}.Hex(),
-	}
-	ReleaseFlag = &cli.StringFlag{
-		Name:    ReleaseFlagName,
-		Usage:   "Release to deploy.",
-		EnvVars: deployer.PrefixEnvVar("RELEASE"),
-		Value:   common.Address{}.Hex(),
+	DevFeatureBitmapFlag = &cli.StringFlag{
+		Name:    DevFeatureBitmapFlagName,
+		Usage:   "Development feature bitmap.",
+		EnvVars: deployer.PrefixEnvVar("DEV_FEATURE_BITMAP"),
+		Value:   common.Hash{}.Hex(),
 	}
 	ProxyOwnerFlag = &cli.StringFlag{
 		Name:    ProxyOwnerFlagName,
@@ -222,69 +138,72 @@ var (
 		Usage:   "Recommended protocol version (semver)",
 		EnvVars: deployer.PrefixEnvVar("RECOMMENDED_PROTOCOL_VERSION"),
 	}
+	SuperchainConfigProxyFlag = &cli.StringFlag{
+		Name:    "superchain-config-proxy",
+		Usage:   "Superchain config proxy.",
+		EnvVars: deployer.PrefixEnvVar("SUPERCHAIN_CONFIG_PROXY"),
+	}
+	ProtocolVersionsProxyFlag = &cli.StringFlag{
+		Name:    "protocol-versions-proxy",
+		Usage:   "Protocol versions proxy.",
+		EnvVars: deployer.PrefixEnvVar("PROTOCOL_VERSIONS_PROXY"),
+	}
+	L1ProxyAdminOwnerFlag = &cli.StringFlag{
+		Name:    "l1-proxy-admin-owner",
+		Aliases: []string{"upgrade-controller"},
+		Usage:   "L1 ProxyAdmin Owner.",
+		EnvVars: append(deployer.PrefixEnvVar("L1_PROXY_ADMIN_OWNER"), deployer.PrefixEnvVar("UPGRADE_CONTROLLER")...),
+	}
+	SuperchainProxyAdminFlag = &cli.StringFlag{
+		Name:    "superchain-proxy-admin",
+		Usage:   "Superchain proxy admin.",
+		EnvVars: deployer.PrefixEnvVar("SUPERCHAIN_PROXY_ADMIN"),
+	}
+	ConfigFileFlag = &cli.StringFlag{
+		Name:    "config",
+		Usage:   "Path to a JSON file",
+		EnvVars: deployer.PrefixEnvVar("CONFIG"),
+	}
+	ChallengerFlag = &cli.StringFlag{
+		Name:    "challenger",
+		Usage:   "Challenger.",
+		EnvVars: deployer.PrefixEnvVar("CHALLENGER"),
+	}
 )
 
-var OPCMFlags = []cli.Flag{
+var ImplementationsFlags = []cli.Flag{
 	deployer.L1RPCURLFlag,
 	deployer.PrivateKeyFlag,
-	ReleaseFlag,
 	OutfileFlag,
-}
-
-var ImplementationsFlags = []cli.Flag{
+	deployer.ArtifactsLocatorFlag,
 	MIPSVersionFlag,
+	DevFeatureBitmapFlag,
 	WithdrawalDelaySecondsFlag,
 	MinProposalSizeBytesFlag,
 	ChallengePeriodSecondsFlag,
 	ProofMaturityDelaySecondsFlag,
 	DisputeGameFinalityDelaySecondsFlag,
-}
-
-var DelayedWETHFlags = []cli.Flag{
-	deployer.L1RPCURLFlag,
-	deployer.PrivateKeyFlag,
-	OutfileFlag,
-	ArtifactsLocatorFlag,
-	DelayedWethImplFlag,
-}
-
-var DisputeGameFlags = []cli.Flag{
-	deployer.L1RPCURLFlag,
-	deployer.PrivateKeyFlag,
-	OutfileFlag,
-	ArtifactsLocatorFlag,
-	VmFlag,
-	GameKindFlag,
-	GameTypeFlag,
-	AbsolutePrestateFlag,
-	MaxGameDepthFlag,
-	SplitDepthFlag,
-	ClockExtensionFlag,
-	MaxClockDurationFlag,
-	DelayedWethProxyFlag,
-	AnchorStateRegistryProxyFlag,
-	L2ChainIdFlag,
-	ProposerFlag,
+	DisputeMaxGameDepthFlag,
+	DisputeSplitDepthFlag,
+	DisputeClockExtensionFlag,
+	DisputeMaxClockDurationFlag,
+	SuperchainConfigProxyFlag,
+	ProtocolVersionsProxyFlag,
+	L1ProxyAdminOwnerFlag,
+	SuperchainProxyAdminFlag,
 	ChallengerFlag,
+	deployer.AutoVerifyFlag,
+	deployer.VerifierFlag,
+	deployer.VerifierUrlFlag,
+	deployer.VerifierAPIKeyFlag,
+	deployer.UseForgeFlag,
 }
-
-var BaseFPVMFlags = []cli.Flag{
-	deployer.L1RPCURLFlag,
-	deployer.PrivateKeyFlag,
-	OutfileFlag,
-	ArtifactsLocatorFlag,
-	PreimageOracleFlag,
-}
-
-var MIPSFlags = append(BaseFPVMFlags, MIPSVersionFlag)
-
-var AsteriscFlags = BaseFPVMFlags
 
 var ProxyFlags = []cli.Flag{
 	deployer.L1RPCURLFlag,
 	deployer.PrivateKeyFlag,
 	OutfileFlag,
-	ArtifactsLocatorFlag,
+	deployer.ArtifactsLocatorFlag,
 	ProxyOwnerFlag,
 }
 
@@ -292,60 +211,34 @@ var SuperchainFlags = []cli.Flag{
 	deployer.L1RPCURLFlag,
 	deployer.PrivateKeyFlag,
 	OutfileFlag,
-	ArtifactsLocatorFlag,
+	deployer.ArtifactsLocatorFlag,
 	SuperchainProxyAdminOwnerFlag,
 	ProtocolVersionsOwnerFlag,
 	GuardianFlag,
 	PausedFlag,
 	RequiredProtocolVersionFlag,
 	RecommendedProtocolVersionFlag,
+	deployer.AutoVerifyFlag,
+	deployer.VerifierFlag,
+	deployer.VerifierUrlFlag,
+	deployer.VerifierAPIKeyFlag,
+	deployer.UseForgeFlag,
+}
+
+var ValidatorFlags = []cli.Flag{
+	deployer.L1RPCURLFlag,
+	deployer.PrivateKeyFlag,
+	OutfileFlag,
+	deployer.ArtifactsLocatorFlag,
+	ConfigFileFlag,
 }
 
 var Commands = []*cli.Command{
 	{
-		Name:   "opcm",
-		Usage:  "Bootstrap an instance of OPCM.",
-		Flags:  cliapp.ProtectFlags(OPCMFlags),
-		Action: OPCMCLI,
-	},
-	{
-		Name:  "implementations",
-		Usage: "Bootstraps implementations.",
-		Flags: cliapp.ProtectFlags(ImplementationsFlags),
-		Action: func(context *cli.Context) error {
-			return errors.New("not implemented yet")
-		},
-		Hidden: true,
-	},
-	{
-		Name:   "delayedweth",
-		Usage:  "Bootstrap an instance of DelayedWETH.",
-		Flags:  cliapp.ProtectFlags(DelayedWETHFlags),
-		Action: DelayedWETHCLI,
-	},
-	{
-		Name:   "disputegame",
-		Usage:  "Bootstrap an instance of a FaultDisputeGame or PermissionedDisputeGame.",
-		Flags:  cliapp.ProtectFlags(DisputeGameFlags),
-		Action: DisputeGameCLI,
-	},
-	{
-		Name:   "mips",
-		Usage:  "Bootstrap an instance of MIPS.",
-		Flags:  cliapp.ProtectFlags(MIPSFlags),
-		Action: MIPSCLI,
-	},
-	{
-		Name:   "asterisc",
-		Usage:  "Bootstrap an instance of Asterisc.",
-		Flags:  cliapp.ProtectFlags(AsteriscFlags),
-		Action: AsteriscCLI,
-	},
-	{
-		Name:   "proxy",
-		Usage:  "Bootstrap a ERC-1967 Proxy without an implementation set.",
-		Flags:  cliapp.ProtectFlags(ProxyFlags),
-		Action: ProxyCLI,
+		Name:   "implementations",
+		Usage:  "Bootstraps implementations.",
+		Flags:  cliapp.ProtectFlags(ImplementationsFlags),
+		Action: ImplementationsCLI,
 	},
 	{
 		Name:   "superchain",

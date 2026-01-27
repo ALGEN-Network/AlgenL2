@@ -302,6 +302,7 @@ func TestSpanBatchTxsTxDatas(t *testing.T) {
 	require.Equal(t, txDatas, sbt.txDatas)
 	require.Equal(t, txTypes, sbt.txTypes)
 }
+
 func TestSpanBatchTxsAddTxs(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x1234))
 	chainID := big.NewInt(rng.Int63n(1000))
@@ -332,14 +333,15 @@ func TestSpanBatchTxsRecoverV(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x123))
 
 	chainID := big.NewInt(rng.Int63n(1000))
-	londonSigner := types.NewLondonSigner(chainID)
+	isthmusSigner := types.NewIsthmusSigner(chainID)
 	totalblockTxCount := 20 + rng.Intn(100)
 
 	cases := []txTypeTest{
 		{"unprotected legacy tx", testutils.RandomLegacyTx, types.HomesteadSigner{}},
-		{"legacy tx", testutils.RandomLegacyTx, londonSigner},
-		{"access list tx", testutils.RandomAccessListTx, londonSigner},
-		{"dynamic fee tx", testutils.RandomDynamicFeeTx, londonSigner},
+		{"legacy tx", testutils.RandomLegacyTx, isthmusSigner},
+		{"access list tx", testutils.RandomAccessListTx, isthmusSigner},
+		{"dynamic fee tx", testutils.RandomDynamicFeeTx, isthmusSigner},
+		{"setcode tx", testutils.RandomSetCodeTx, isthmusSigner},
 	}
 
 	for _, testCase := range cases {
@@ -347,7 +349,7 @@ func TestSpanBatchTxsRecoverV(t *testing.T) {
 			var spanBatchTxs spanBatchTxs
 			var txTypes []int
 			var txSigs []spanBatchSignature
-			var originalVs []uint64
+			var originalVs []*big.Int
 			yParityBits := new(big.Int)
 			protectedBits := new(big.Int)
 			totalLegacyTxCount := 0
@@ -369,8 +371,8 @@ func TestSpanBatchTxsRecoverV(t *testing.T) {
 				txSig.r, _ = uint256.FromBig(r)
 				txSig.s, _ = uint256.FromBig(s)
 				txSigs = append(txSigs, txSig)
-				originalVs = append(originalVs, v.Uint64())
-				yParityBit, err := convertVToYParity(v.Uint64(), int(tx.Type()))
+				originalVs = append(originalVs, v)
+				yParityBit, err := convertVToYParity(v, int(tx.Type()))
 				require.NoError(t, err)
 				yParityBits.SetBit(yParityBits, idx, yParityBit)
 			}
@@ -383,11 +385,11 @@ func TestSpanBatchTxsRecoverV(t *testing.T) {
 			err := spanBatchTxs.recoverV(chainID)
 			require.NoError(t, err)
 
-			var recoveredVs []uint64
+			var recoveredVs []*big.Int
 			for _, txSig := range spanBatchTxs.txSigs {
 				recoveredVs = append(recoveredVs, txSig.v)
 			}
-			require.Equal(t, originalVs, recoveredVs, "recovered v mismatch")
+			requireEqual(t, originalVs, recoveredVs, "recovered v mismatch")
 		})
 	}
 }
@@ -416,20 +418,21 @@ func TestSpanBatchTxsRoundTrip(t *testing.T) {
 		err = sbt2.recoverV(chainID)
 		require.NoError(t, err)
 
-		require.Equal(t, sbt, &sbt2)
+		requireEqual(t, sbt, &sbt2)
 	}
 }
 
 func TestSpanBatchTxsRoundTripFullTxs(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x13377331))
 	chainID := big.NewInt(rng.Int63n(1000))
-	londonSigner := types.NewLondonSigner(chainID)
+	isthmusSigner := types.NewIsthmusSigner(chainID)
 
 	cases := []txTypeTest{
 		{"unprotected legacy tx", testutils.RandomLegacyTx, types.HomesteadSigner{}},
-		{"legacy tx", testutils.RandomLegacyTx, londonSigner},
-		{"access list tx", testutils.RandomAccessListTx, londonSigner},
-		{"dynamic fee tx", testutils.RandomDynamicFeeTx, londonSigner},
+		{"legacy tx", testutils.RandomLegacyTx, isthmusSigner},
+		{"access list tx", testutils.RandomAccessListTx, isthmusSigner},
+		{"dynamic fee tx", testutils.RandomDynamicFeeTx, isthmusSigner},
+		{"setcode tx", testutils.RandomSetCodeTx, isthmusSigner},
 	}
 
 	for _, testCase := range cases {
@@ -462,7 +465,7 @@ func TestSpanBatchTxsRecoverVInvalidTxType(t *testing.T) {
 	var sbt spanBatchTxs
 
 	sbt.txTypes = []int{types.DepositTxType}
-	sbt.txSigs = []spanBatchSignature{{v: 0, r: nil, s: nil}}
+	sbt.txSigs = []spanBatchSignature{{v: big.NewInt(0), r: nil, s: nil}}
 	sbt.yParityBits = new(big.Int)
 	sbt.protectedBits = new(big.Int)
 
@@ -473,13 +476,14 @@ func TestSpanBatchTxsRecoverVInvalidTxType(t *testing.T) {
 func TestSpanBatchTxsFullTxNotEnoughTxTos(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x13572468))
 	chainID := big.NewInt(rng.Int63n(1000))
-	londonSigner := types.NewLondonSigner(chainID)
+	isthmusSigner := types.NewIsthmusSigner(chainID)
 
 	cases := []txTypeTest{
 		{"unprotected legacy tx", testutils.RandomLegacyTx, types.HomesteadSigner{}},
-		{"legacy tx", testutils.RandomLegacyTx, londonSigner},
-		{"access list tx", testutils.RandomAccessListTx, londonSigner},
-		{"dynamic fee tx", testutils.RandomDynamicFeeTx, londonSigner},
+		{"legacy tx", testutils.RandomLegacyTx, isthmusSigner},
+		{"access list tx", testutils.RandomAccessListTx, isthmusSigner},
+		{"dynamic fee tx", testutils.RandomDynamicFeeTx, isthmusSigner},
+		{"setcode tx", testutils.RandomSetCodeTx, isthmusSigner},
 	}
 
 	for _, testCase := range cases {

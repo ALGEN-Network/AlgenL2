@@ -1,4 +1,4 @@
-import '../just/go.just'
+import '../justfiles/go.just'
 
 # Build ldflags string
 _LDFLAGSSTRING := "'" + trim(
@@ -33,4 +33,4 @@ fuzz:
         "FuzzChannelZeroCloseTimeout" \
         "FuzzSeqWindowClose" \
         "FuzzSeqWindowZeroTimeoutClose" \
-    | parallel -j {{PARALLEL_JOBS}} {{just_executable()}} batcher_fuzz_task {}
+    | parallel --tag -j {{PARALLEL_JOBS}} {{just_executable()}} batcher_fuzz_task {}

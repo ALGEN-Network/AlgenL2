@@ -560,7 +560,7 @@ func (s *SyncClient) peerLoop(ctx context.Context, id peer.ID) {
 	}()
 
 	log := s.log.New("peer", id)
-	log.Info("Starting P2P sync client event loop")
+	log.Debug("Starting P2P sync client event loop")
 
 	// Implement the same rate limits as the server does per-peer,
 	// so we don't be too aggressive to the server.
@@ -703,7 +703,8 @@ func (s *SyncClient) doRequest(ctx context.Context, id peer.ID, expectedBlockNum
 
 	version := binary.LittleEndian.Uint32(versionData[:])
 	isCanyon := s.cfg.IsCanyon(s.cfg.TimestampForBlock(expectedBlockNum))
-	envelope, err := readExecutionPayload(version, data, isCanyon)
+	isIsthmus := s.cfg.IsIsthmus(s.cfg.TimestampForBlock(expectedBlockNum))
+	envelope, err := readExecutionPayload(version, data, isCanyon, isIsthmus)
 	if err != nil {
 		return err
 	}
@@ -716,7 +717,7 @@ func (s *SyncClient) doRequest(ctx context.Context, id peer.ID, expectedBlockNum
 	select {
 	case s.results <- syncResult{payload: envelope, peer: id}:
 	case <-ctx.Done():
-		return fmt.Errorf("failed to process response, sync client is too busy: %w", err)
+		return fmt.Errorf("failed to process response, sync client is too busy")
 	}
 	return nil
 }
@@ -735,7 +736,7 @@ func panicGuard[T, S, U any](fn func(T, S, U) error) func(T, S, U) error {
 }
 
 // readExecutionPayload will unmarshal the supplied data into an ExecutionPayloadEnvelope.
-func readExecutionPayload(version uint32, data []byte, isCanyon bool) (*eth.ExecutionPayloadEnvelope, error) {
+func readExecutionPayload(version uint32, data []byte, isCanyon, isIsthmus bool) (*eth.ExecutionPayloadEnvelope, error) {
 	switch version {
 	case 0:
 		blockVersion := eth.BlockV1
@@ -749,7 +750,11 @@ func readExecutionPayload(version uint32, data []byte, isCanyon bool) (*eth.Exec
 		return &eth.ExecutionPayloadEnvelope{ExecutionPayload: &res}, nil
 	case 1:
 		envelope := &eth.ExecutionPayloadEnvelope{}
-		if err := envelope.UnmarshalSSZ(uint32(len(data)), bytes.NewReader(data)); err != nil {
+		blockVersion := eth.BlockV3
+		if isIsthmus {
+			blockVersion = eth.BlockV4
+		}
+		if err := envelope.UnmarshalSSZ(blockVersion, uint32(len(data)), bytes.NewReader(data)); err != nil {
 			return nil, fmt.Errorf("failed to decode execution payload envelope response: %w", err)
 		}
 		return envelope, nil
@@ -876,6 +881,7 @@ func (srv *ReqRespServer) handleSyncRequest(ctx context.Context, stream network.
 		// We'll disconnect ourselves only when failing to read/write,
 		// if the work is invalid (range validation), or when individual sub tasks timeout.
 		if err := ps.Requests.Wait(ctx); err != nil {
+			srv.peerStatsLock.Unlock()
 			return 0, fmt.Errorf("timed out waiting for global sync rate limit: %w", err)
 		}
 	}

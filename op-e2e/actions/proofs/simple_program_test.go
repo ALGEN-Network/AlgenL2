@@ -1,18 +1,29 @@
-package proofs
+package proofs_test
 
 import (
 	"testing"
 
+	"github.com/ethereum-optimism/optimism/op-batcher/flags"
+	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	actionsHelpers "github.com/ethereum-optimism/optimism/op-e2e/actions/helpers"
 	"github.com/ethereum-optimism/optimism/op-e2e/actions/proofs/helpers"
-	"github.com/ethereum-optimism/optimism/op-program/client/claim"
-	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/stretchr/testify/require"
 )
 
 func runSimpleProgramTest(gt *testing.T, testCfg *helpers.TestCfg[any]) {
 	t := actionsHelpers.NewDefaultTesting(gt)
-	env := helpers.NewL2FaultProofEnv(t, testCfg, helpers.NewTestParams(), helpers.NewBatcherCfg())
+	testSetup := func(dc *genesis.DeployConfig) {
+		dc.L1PragueTimeOffset = ptr(hexutil.Uint64(0))
+		// Set non-trivial excess blob gas so that the L1 miner's blob logic is
+		// properly tested.
+		dc.L1GenesisBlockExcessBlobGas = ptr(hexutil.Uint64(1e8))
+	}
+	bcfg := helpers.NewBatcherCfg(func(c *actionsHelpers.BatcherCfg) {
+		c.DataAvailabilityType = flags.BlobsType
+	})
+	env := helpers.NewL2FaultProofEnv(t, testCfg, helpers.NewTestParams(), bcfg, testSetup)
 
 	// Build an empty block on L2
 	env.Sequencer.ActL2StartBlock(t)
@@ -36,30 +47,20 @@ func runSimpleProgramTest(gt *testing.T, testCfg *helpers.TestCfg[any]) {
 	l2SafeHead := env.Engine.L2Chain().CurrentSafeBlock()
 
 	// Ensure there is only 1 block on L1.
-	require.Equal(t, uint64(1), l1Head.Number.Uint64())
+	require.Equal(t, uint64(1), bigs.Uint64Strict(l1Head.Number))
 	// Ensure the block is marked as safe before we attempt to fault prove it.
-	require.Equal(t, uint64(1), l2SafeHead.Number.Uint64())
+	require.Equal(t, uint64(1), bigs.Uint64Strict(l2SafeHead.Number))
 
-	env.RunFaultProofProgram(t, l2SafeHead.Number.Uint64(), testCfg.CheckResult, testCfg.InputParams...)
+	env.RunFaultProofProgramFromGenesis(t, bigs.Uint64Strict(l2SafeHead.Number), testCfg.CheckResult, testCfg.InputParams...)
 }
 
 func Test_ProgramAction_SimpleEmptyChain(gt *testing.T) {
 	matrix := helpers.NewMatrix[any]()
 	defer matrix.Run(gt)
 
-	matrix.AddTestCase(
-		"HonestClaim",
+	matrix.AddDefaultTestCases(
 		nil,
 		helpers.LatestForkOnly,
 		runSimpleProgramTest,
-		helpers.ExpectNoError(),
-	)
-	matrix.AddTestCase(
-		"JunkClaim",
-		nil,
-		helpers.LatestForkOnly,
-		runSimpleProgramTest,
-		helpers.ExpectError(claim.ErrClaimNotValid),
-		helpers.WithL2Claim(common.HexToHash("0xdeadbeef")),
 	)
 }

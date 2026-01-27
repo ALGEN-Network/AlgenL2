@@ -18,12 +18,13 @@ func TestDebugInfo_Serialization(t *testing.T) {
 		NumPreimageRequests:          3,
 		TotalPreimageSize:            4,
 		TotalSteps:                   123456,
+		InstructionCacheMissCount:    10,
+		HighestICacheMissPC:          11,
 		RmwSuccessCount:              5,
 		RmwFailCount:                 6,
 		MaxStepsBetweenLLAndSC:       7,
 		ReservationInvalidationCount: 8,
 		ForcedPreemptionCount:        9,
-		FailedWakeupCount:            10,
 		IdleStepCountThread0:         math.MaxUint64,
 	}
 

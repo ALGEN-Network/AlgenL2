@@ -6,20 +6,21 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-e2e/actions/helpers"
-	"github.com/ethereum-optimism/optimism/op-service/predeploys"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
+	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-e2e/bindings"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
@@ -32,21 +33,13 @@ var (
 func TestFjordNetworkUpgradeTransactions(gt *testing.T) {
 	t := helpers.NewDefaultTesting(gt)
 	dp := e2eutils.MakeDeployParams(t, helpers.DefaultRollupTestParams())
-	genesisBlock := hexutil.Uint64(0)
-	fjordOffset := hexutil.Uint64(2)
 
 	log := testlog.Logger(t, log.LvlDebug)
 
-	dp.DeployConfig.L1CancunTimeOffset = &genesisBlock // can be removed once Cancun on L1 is the default
-
 	// Activate all forks at genesis, and schedule Fjord the block after
-	dp.DeployConfig.L2GenesisRegolithTimeOffset = &genesisBlock
-	dp.DeployConfig.L2GenesisCanyonTimeOffset = &genesisBlock
-	dp.DeployConfig.L2GenesisDeltaTimeOffset = &genesisBlock
-	dp.DeployConfig.L2GenesisEcotoneTimeOffset = &genesisBlock
-	dp.DeployConfig.L2GenesisFjordTimeOffset = &fjordOffset
-	dp.DeployConfig.L2GenesisGraniteTimeOffset = nil
-	dp.DeployConfig.L2GenesisHoloceneTimeOffset = nil
+	fjordOffset := uint64(2)
+	dp.DeployConfig.ActivateForkAtOffset(forks.Fjord, fjordOffset)
+
 	require.NoError(t, dp.DeployConfig.Check(log), "must have valid config")
 
 	sd := e2eutils.Setup(t, dp, helpers.DefaultAlloc)
@@ -70,7 +63,7 @@ func TestFjordNetworkUpgradeTransactions(gt *testing.T) {
 	// get latest block
 	latestBlock, err := ethCl.BlockByNumber(context.Background(), nil)
 	require.NoError(t, err)
-	require.Equal(t, sequencer.L2Unsafe().Number, latestBlock.Number().Uint64())
+	require.Equal(t, sequencer.L2Unsafe().Number, latestBlock.NumberU64())
 
 	transactions := latestBlock.Transactions()
 	// L1Block: 1 set-L1-info + 1 deploys + 1 upgradeTo + 1 enable fjord on GPO
@@ -106,7 +99,7 @@ func TestFjordNetworkUpgradeTransactions(gt *testing.T) {
 
 	gpoL1GasUsed, err := gasPriceOracle.GetL1GasUsed(&bind.CallOpts{}, txData)
 	require.NoError(t, err)
-	require.Equal(gt, uint64(1_888), gpoL1GasUsed.Uint64())
+	require.Equal(gt, uint64(1_888), bigs.Uint64Strict(gpoL1GasUsed))
 
 	// Check that GetL1Fee takes into account fast LZ
 	gpoFee, err := gasPriceOracle.GetL1Fee(&bind.CallOpts{}, txData)
@@ -115,7 +108,7 @@ func TestFjordNetworkUpgradeTransactions(gt *testing.T) {
 	gethFee := fjordL1Cost(t, gasPriceOracle, types.RollupCostData{
 		FastLzSize: uint64(types.FlzCompressLen(txData) + 68),
 	})
-	require.Equal(t, gethFee.Uint64(), gpoFee.Uint64())
+	require.Equal(t, bigs.Uint64Strict(gethFee), bigs.Uint64Strict(gpoFee))
 
 	// Check that L1FeeUpperBound works
 	upperBound, err := gasPriceOracle.GetL1FeeUpperBound(&bind.CallOpts{}, big.NewInt(int64(len(txData))))
@@ -125,7 +118,7 @@ func TestFjordNetworkUpgradeTransactions(gt *testing.T) {
 	flzUpperBound := uint64(txLen + txLen/255 + 16)
 
 	upperBoundCost := fjordL1Cost(t, gasPriceOracle, types.RollupCostData{FastLzSize: flzUpperBound})
-	require.Equal(t, upperBoundCost.Uint64(), upperBound.Uint64())
+	require.Equal(t, bigs.Uint64Strict(upperBoundCost), bigs.Uint64Strict(upperBound))
 }
 
 func fjordL1Cost(t require.TestingT, gasPriceOracle *bindings.GasPriceOracleCaller, rollupCostData types.RollupCostData) *big.Int {

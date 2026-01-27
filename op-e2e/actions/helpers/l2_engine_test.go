@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
 	"github.com/ethereum-optimism/optimism/op-program/client/l2/engineapi"
 	"github.com/ethereum-optimism/optimism/op-program/client/l2/engineapi/test"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
@@ -54,7 +55,7 @@ func TestL2EngineAPI(gt *testing.T) {
 		}
 	})
 
-	payloadA, err := eth.BlockAsPayloadEnv(chainA[0], sd.RollupCfg.CanyonTime)
+	payloadA, err := eth.BlockAsPayloadEnv(chainA[0], sd.L2Cfg.Config)
 	require.NoError(t, err)
 
 	// apply the payload
@@ -83,7 +84,7 @@ func TestL2EngineAPI(gt *testing.T) {
 		}
 	})
 
-	payloadB, err := eth.BlockAsPayloadEnv(chainB[0], sd.RollupCfg.CanyonTime)
+	payloadB, err := eth.BlockAsPayloadEnv(chainB[0], sd.L2Cfg.Config)
 	require.NoError(t, err)
 
 	// apply the payload
@@ -202,7 +203,7 @@ func TestL2EngineAPIBlockBuilding(gt *testing.T) {
 	require.Equal(gt, 1, engine.l2Chain.GetBlockByHash(engine.l2Chain.CurrentBlock().Hash()).Transactions().Len(), "tx from alice is included")
 	buildBlock(false)
 	require.Zero(t, engine.l2Chain.GetBlockByHash(engine.l2Chain.CurrentBlock().Hash()).Transactions().Len(), "no tx included")
-	require.Equal(t, uint64(3), engine.l2Chain.CurrentBlock().Number.Uint64(), "built 3 blocks")
+	require.Equal(t, uint64(3), bigs.Uint64Strict(engine.l2Chain.CurrentBlock().Number), "built 3 blocks")
 }
 
 func TestL2EngineAPIFail(gt *testing.T) {

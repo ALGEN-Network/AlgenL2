@@ -113,7 +113,7 @@ contract Faucet {
             "Faucet: drip parameters could not be verified by security module"
         );
 
-        // Verify recepient is not the faucet address.
+        // Verify recipient is not the faucet address.
         require(_params.recipient != address(this), "Faucet: cannot drip to itself");
 
         // Set the next timestamp at which this auth id can be used.
@@ -123,7 +123,8 @@ contract Faucet {
         nonces[_auth.id][_params.nonce] = true;
 
         // Execute transfer of ETH to the recipient account.
-        SafeCall.call(_params.recipient, _params.gasLimit, config.amount, _params.data);
+        bool success = SafeCall.call(_params.recipient, _params.gasLimit, config.amount, _params.data);
+        require(success, "Faucet: Failed to execute SafeCall during drip to recipient");
 
         emit Drip(config.name, _auth.id, config.amount, _params.recipient);
     }

@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/sources"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum/go-ethereum/log"
@@ -31,7 +32,7 @@ func TestDeriveChainFromNearL1Genesis(gt *testing.T) {
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	dp := e2eutils.MakeDeployParams(t, p)
 	// do not activate Delta hardfork for verifier
@@ -41,7 +42,7 @@ func TestDeriveChainFromNearL1Genesis(gt *testing.T) {
 	miner, seqEngine, sequencer := helpers.SetupSequencerTest(t, sd, logger)
 
 	miner.ActEmptyBlock(t)
-	require.EqualValues(gt, 1, miner.L1Chain().CurrentBlock().Number.Uint64())
+	require.EqualValues(gt, 1, bigs.Uint64Strict(miner.L1Chain().CurrentBlock().Number))
 
 	ref, err := derive.L2BlockToBlockRef(sequencer.RollupCfg, seqEngine.L2Chain().Genesis())
 	require.NoError(gt, err)
@@ -49,7 +50,7 @@ func TestDeriveChainFromNearL1Genesis(gt *testing.T) {
 
 	sequencer.ActL1HeadSignal(t)
 	sequencer.ActBuildToL1Head(t)
-	l2BlockNum := seqEngine.L2Chain().CurrentBlock().Number.Uint64()
+	l2BlockNum := bigs.Uint64Strict(seqEngine.L2Chain().CurrentBlock().Number)
 	ref, err = derive.L2BlockToBlockRef(sequencer.RollupCfg, seqEngine.L2Chain().GetBlockByNumber(l2BlockNum))
 	require.NoError(gt, err)
 	require.EqualValues(gt, 1, ref.L1Origin.Number)
@@ -74,31 +75,31 @@ func TestDeriveChainFromNearL1Genesis(gt *testing.T) {
 	miner.ActL1EndBlock(t)
 	bl := miner.L1Chain().CurrentBlock()
 	logger.Info("Produced L1 block with batch",
-		"num", miner.L1Chain().CurrentBlock().Number.Uint64(),
+		"num", bigs.Uint64Strict(miner.L1Chain().CurrentBlock().Number),
 		"txs", len(miner.L1Chain().GetBlockByHash(bl.Hash()).Transactions()))
 
 	// Process batches so safe head updates
 	sequencer.ActL1HeadSignal(t)
 	sequencer.ActL2PipelineFull(t)
-	require.EqualValues(gt, l2BlockNum, seqEngine.L2Chain().CurrentSafeBlock().Number.Uint64())
+	require.EqualValues(gt, l2BlockNum, bigs.Uint64Strict(seqEngine.L2Chain().CurrentSafeBlock().Number))
 
 	// Finalize L1 and process so L2 finalized updates
-	miner.ActL1Safe(t, miner.L1Chain().CurrentBlock().Number.Uint64())
-	miner.ActL1Finalize(t, miner.L1Chain().CurrentBlock().Number.Uint64())
+	miner.ActL1Safe(t, bigs.Uint64Strict(miner.L1Chain().CurrentBlock().Number))
+	miner.ActL1Finalize(t, bigs.Uint64Strict(miner.L1Chain().CurrentBlock().Number))
 	sequencer.ActL1SafeSignal(t)
 	sequencer.ActL1FinalizedSignal(t)
 	sequencer.ActL2PipelineFull(t)
-	require.EqualValues(gt, l2BlockNum, seqEngine.L2Chain().CurrentFinalBlock().Number.Uint64())
+	require.EqualValues(gt, l2BlockNum, bigs.Uint64Strict(seqEngine.L2Chain().CurrentFinalBlock().Number))
 
 	// Create a new verifier using the existing engine so it already has the safe and finalized heads set.
 	// This is the same situation as if op-node restarted at this point.
 	l2Cl, err := sources.NewEngineClient(seqEngine.RPCClient(), logger, nil, sources.EngineClientDefaultConfig(sd.RollupCfg))
 	require.NoError(gt, err)
 	verifier := helpers.NewL2Verifier(t, logger, miner.L1Client(t, sd.RollupCfg), miner.BlobStore(), altda.Disabled,
-		l2Cl, sequencer.RollupCfg, &sync.Config{}, safedb.Disabled, nil)
+		l2Cl, sd.RollupCfg, sd.L1Cfg.Config, sd.DependencySet, &sync.Config{}, safedb.Disabled)
 	verifier.ActL2PipelineFull(t) // Should not get stuck in a reset loop forever
-	require.EqualValues(gt, l2BlockNum, seqEngine.L2Chain().CurrentSafeBlock().Number.Uint64())
-	require.EqualValues(gt, l2BlockNum, seqEngine.L2Chain().CurrentFinalBlock().Number.Uint64())
+	require.EqualValues(gt, l2BlockNum, bigs.Uint64Strict(seqEngine.L2Chain().CurrentSafeBlock().Number))
+	require.EqualValues(gt, l2BlockNum, bigs.Uint64Strict(seqEngine.L2Chain().CurrentFinalBlock().Number))
 	syncStatus := verifier.SyncStatus()
 	require.EqualValues(gt, l2BlockNum, syncStatus.SafeL2.Number)
 	require.EqualValues(gt, l2BlockNum, syncStatus.FinalizedL2.Number)

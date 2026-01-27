@@ -11,8 +11,46 @@ You can:
   - **IMPORTANT**: If you believe your report impacts the security of this repository, refer to the canonical [Security Policy](https://github.com/ethereum-optimism/.github/blob/master/SECURITY.md) document.
 - Fix issues that are tagged as [`D-good-first-issue`](https://github.com/ethereum-optimism/optimism/labels/D-good-first-issue) or [`S-confirmed`](https://github.com/ethereum-optimism/optimism/labels/S-confirmed).
 - Larger projects are listed on [this project board](https://github.com/orgs/ethereum-optimism/projects/31/views/9). Please talk to us if you're considering working on one of these, they may not be fully specified so it will reduce risk to discuss the approach and ensure that it's still relevant.
-- Help improve the [Optimism Developer Docs](https://github.com/ethereum-optimism/docs) by reporting issues, fixing typos, or adding missing sections.
+- Help improve the [Optimism Docs] by reporting issues or adding missing sections.
 - Get involved in the protocol design process by joining discussions within the [OP Stack Specs](https://github.com/ethereum-optimism/specs/discussions) repository.
+
+[Optimism Docs]: https://github.com/ethereum-optimism/docs
+
+### Contributions Related to Spelling and Grammar
+
+At this time, we will not be accepting contributions that primarily fix
+spelling, stylistic or grammatical errors in documentation, code or elsewhere.
+
+Pull Requests that ignore this guideline will be closed,
+and may be aggregated into new Pull Requests without attribution.
+
+### Trivial Changes Discouraged
+
+We kindly ask contributors **not to submit pull requests that only make trivial changes**, such as:
+
+- Adjusting whitespace, punctuation, or formatting without substantive content changes
+- Renaming variables or refactoring code without a clear functional or readability benefit
+- Other one‑line or cosmetic edits that do not materially improve the project
+
+#### Why we discourage trivial PRs
+
+While we appreciate every attempt to contribute, **small, non‑substantive PRs create significant review and merge overhead** for maintainers without meaningfully improving the codebase or documentation. Reviewing, testing, and merging even a one‑word change takes real time and effort.
+
+To keep maintainers focused on impactful contributions, we will:
+
+- **Close trivial PRs** that fall into the above categories
+- **Aggregate minor typo or formatting fixes internally** if needed, without attribution
+- Encourage contributors to instead take on meaningful issues, such as those labeled [`D-good-first-issue`](https://github.com/ethereum-optimism/optimism/labels/D-good-first-issue) or [`S-confirmed`](https://github.com/ethereum-optimism/optimism/labels/S-confirmed)
+
+#### Better ways to help
+
+If you’d like to contribute in a small but meaningful way:
+
+- **Batch several fixes into one PR** instead of submitting many tiny ones
+- Look for beginner‑friendly issues in our [`D-good-first-issue`](https://github.com/ethereum-optimism/optimism/labels/D-good-first-issue) label
+- Improve documentation by adding missing explanations, examples, or clarifications rather than small grammar tweaks
+
+This ensures your effort has a **real impact** and increases the chance your PR will be reviewed and merged quickly.
 
 ## Code of Conduct
 
@@ -163,6 +201,8 @@ In order to contribute, fork the appropriate branch, for non-breaking changes to
 Additionally, if you are writing a new feature, please ensure you add appropriate test cases.
 
 Follow the [Development Quick Start](#development-quick-start) to set up your local development environment.
+
+Read any README files in the packages you are contributing to. Some packages have additional instructions that are not covered in this guide.
 
 We recommend using the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) format on commit messages.
 
