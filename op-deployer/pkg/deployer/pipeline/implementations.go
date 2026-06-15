@@ -1,17 +1,16 @@
 package pipeline
 
 import (
-	"context"
 	"fmt"
 	"math/big"
 
-	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
-	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
+	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 )
 
 func DeployImplementations(env *Env, intent *state.Intent, st *state.State) error {
@@ -58,29 +57,22 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 		FaultGameV2ClockExtension:       new(big.Int).SetUint64(proofParams.DisputeClockExtension),
 		FaultGameV2MaxClockDuration:     new(big.Int).SetUint64(proofParams.DisputeMaxClockDuration),
 		SuperchainConfigProxy:           st.SuperchainDeployment.SuperchainConfigProxy,
-		ProtocolVersionsProxy:           st.SuperchainDeployment.ProtocolVersionsProxy,
 		SuperchainProxyAdmin:            st.SuperchainDeployment.SuperchainProxyAdminImpl,
 		L1ProxyAdminOwner:               st.SuperchainRoles.SuperchainProxyAdminOwner,
 		Challenger:                      st.SuperchainRoles.Challenger,
 	}
 
 	if env.UseForge {
-		if env.ForgeClient == nil {
-			return fmt.Errorf("Forge client is nil but UseForge is enabled")
-		}
-		if env.Context == nil {
-			env.Context = context.Background()
-		}
 		lgr.Info("using Forge for DeployImplementations")
-		forgeCaller := opcm.NewDeployImplementationsForgeCaller(env.ForgeClient)
-		forgeOpts := []string{
-			"--rpc-url", env.L1RPCUrl,
-			"--broadcast",
-			"--private-key", env.PrivateKey,
+		forgeEnv := &opcm.ForgeEnv{
+			Client:     env.ForgeClient,
+			Context:    env.Context,
+			L1RPCUrl:   env.L1RPCUrl,
+			PrivateKey: env.PrivateKey,
 		}
-		dio, _, err = forgeCaller(env.Context, input, forgeOpts...)
+		dio, err = opcm.DeployImplementationsViaForge(forgeEnv, input)
 		if err != nil {
-			return fmt.Errorf("failed to deploy implementations with Forge: %w", err)
+			return err
 		}
 	} else {
 		dio, err = env.Scripts.DeployImplementations.Run(input)
@@ -90,17 +82,13 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 	}
 
 	st.ImplementationsDeployment = &addresses.ImplementationsContracts{
-		OpcmImpl:                         dio.Opcm,
-		OpcmGameTypeAdderImpl:            dio.OpcmGameTypeAdder,
-		OpcmDeployerImpl:                 dio.OpcmDeployer,
-		OpcmUpgraderImpl:                 dio.OpcmUpgrader,
-		OpcmInteropMigratorImpl:          dio.OpcmInteropMigrator,
 		OpcmStandardValidatorImpl:        dio.OpcmStandardValidator,
+		OpcmUtilsImpl:                    dio.OpcmUtils,
+		OpcmMigratorImpl:                 dio.OpcmMigrator,
 		OpcmV2Impl:                       dio.OpcmV2,
 		OpcmContainerImpl:                dio.OpcmContainer,
 		DelayedWethImpl:                  dio.DelayedWETHImpl,
 		OptimismPortalImpl:               dio.OptimismPortalImpl,
-		OptimismPortalInteropImpl:        dio.OptimismPortalInteropImpl,
 		EthLockboxImpl:                   dio.ETHLockboxImpl,
 		PreimageOracleImpl:               dio.PreimageOracleSingleton,
 		MipsImpl:                         dio.MipsSingleton,
@@ -113,7 +101,10 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 		AnchorStateRegistryImpl:          dio.AnchorStateRegistryImpl,
 		FaultDisputeGameImpl:             dio.FaultDisputeGameImpl,
 		PermissionedDisputeGameImpl:      dio.PermissionedDisputeGameImpl,
+		ZkDisputeGameImpl:                dio.ZkDisputeGameImpl,
 		StorageSetterImpl:                dio.StorageSetterImpl,
+		SuperFaultDisputeGameImpl:        dio.SuperFaultDisputeGameImpl,
+		SuperPermissionedDisputeGameImpl: dio.SuperPermissionedDisputeGameImpl,
 	}
 
 	return nil

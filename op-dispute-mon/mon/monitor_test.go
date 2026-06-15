@@ -103,7 +103,7 @@ func setupMonitorTest(t *testing.T) (*gameMonitor, *mockExtractor, *mockForecast
 		return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 	}
 	monitorInterval := 100 * time.Millisecond
-	cl := clock.NewAdvancingClock(10 * time.Millisecond)
+	cl := clock.NewAdvancingClock()
 	cl.Start()
 	extractor := &mockExtractor{}
 	forecast := &mockForecast{}
@@ -111,9 +111,11 @@ func setupMonitorTest(t *testing.T) (*gameMonitor, *mockExtractor, *mockForecast
 	monitor2 := &mockMonitor{}
 	monitor3 := &mockMonitor{}
 	monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-		extractor.Extract, forecast.Forecast, monitor1.Check, monitor2.Check, monitor3.Check)
+		extractor.Extract, forecast.Forecast, noopAnchorStateCheck, monitor1.Check, monitor2.Check, monitor3.Check)
 	return monitor, extractor, forecast, []*mockMonitor{monitor1, monitor2, monitor3}
 }
+
+func noopAnchorStateCheck(_ context.Context, _ common.Hash, _ []*monTypes.EnrichedGameData) {}
 
 type mockMonitor struct {
 	calls int
@@ -168,21 +170,21 @@ func TestMonitor_NodeEndpointErrorsMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create games with endpoint errors
 		games := []*monTypes.EnrichedGameData{
 			{
 				GameMetadata: types.GameMetadata{Proxy: common.Address{0x11}},
-				RollupEndpointErrors: map[string]bool{
+				NodeEndpointErrors: map[string]bool{
 					"endpoint_1": true,
 					"endpoint_2": true,
 				},
 			},
 			{
 				GameMetadata: types.GameMetadata{Proxy: common.Address{0x22}},
-				RollupEndpointErrors: map[string]bool{
+				NodeEndpointErrors: map[string]bool{
 					"endpoint_2": true, // Overlapping with first game
 					"endpoint_3": true,
 				},
@@ -195,7 +197,7 @@ func TestMonitor_NodeEndpointErrorsMonitorIntegration(t *testing.T) {
 		nodeEndpointErrorsMonitor := NewNodeEndpointErrorsMonitor(logger, nodeEndpointErrorsMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, nodeEndpointErrorsMonitor.CheckNodeEndpointErrors)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, nodeEndpointErrorsMonitor.CheckNodeEndpointErrors)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -215,22 +217,22 @@ func TestMonitor_NodeEndpointErrorCountMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create games with endpoint error counts
 		games := []*monTypes.EnrichedGameData{
 			{
-				GameMetadata:             types.GameMetadata{Proxy: common.Address{0x11}},
-				RollupEndpointErrorCount: 5, // First game has 5 errors
+				GameMetadata:           types.GameMetadata{Proxy: common.Address{0x11}},
+				NodeEndpointErrorCount: 5, // First game has 5 errors
 			},
 			{
-				GameMetadata:             types.GameMetadata{Proxy: common.Address{0x22}},
-				RollupEndpointErrorCount: 3, // Second game has 3 errors
+				GameMetadata:           types.GameMetadata{Proxy: common.Address{0x22}},
+				NodeEndpointErrorCount: 3, // Second game has 3 errors
 			},
 			{
-				GameMetadata:             types.GameMetadata{Proxy: common.Address{0x33}},
-				RollupEndpointErrorCount: 0, // Third game has no errors
+				GameMetadata:           types.GameMetadata{Proxy: common.Address{0x33}},
+				NodeEndpointErrorCount: 0, // Third game has no errors
 			},
 		}
 
@@ -240,7 +242,7 @@ func TestMonitor_NodeEndpointErrorCountMonitorIntegration(t *testing.T) {
 		nodeEndpointErrorCountMonitor := NewNodeEndpointErrorCountMonitor(logger, nodeEndpointErrorCountMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, nodeEndpointErrorCountMonitor.CheckNodeEndpointErrorCount)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, nodeEndpointErrorCountMonitor.CheckNodeEndpointErrorCount)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -269,34 +271,34 @@ func TestMonitor_MixedAvailabilityMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create games with mixed availability scenarios
 		games := []*monTypes.EnrichedGameData{
 			{
-				GameMetadata:                types.GameMetadata{Proxy: common.Address{0x11}},
-				RollupEndpointTotalCount:    3,
-				RollupEndpointNotFoundCount: 1, // Mixed availability: some found, some not found
-				RollupEndpointErrorCount:    0,
+				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x11}},
+				NodeEndpointTotalCount:    3,
+				NodeEndpointNotFoundCount: 1, // Mixed availability: some found, some not found
+				NodeEndpointErrorCount:    0,
 			},
 			{
-				GameMetadata:                types.GameMetadata{Proxy: common.Address{0x22}},
-				RollupEndpointTotalCount:    2,
-				RollupEndpointNotFoundCount: 2, // All endpoints not found - not mixed availability
-				RollupEndpointErrorCount:    0,
+				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x22}},
+				NodeEndpointTotalCount:    2,
+				NodeEndpointNotFoundCount: 2, // All endpoints not found - not mixed availability
+				NodeEndpointErrorCount:    0,
 			},
 			{
-				GameMetadata:                types.GameMetadata{Proxy: common.Address{0x33}},
-				RollupEndpointTotalCount:    4,
-				RollupEndpointNotFoundCount: 2, // Mixed availability: some found, some not found
-				RollupEndpointErrorCount:    0,
+				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x33}},
+				NodeEndpointTotalCount:    4,
+				NodeEndpointNotFoundCount: 2, // Mixed availability: some found, some not found
+				NodeEndpointErrorCount:    0,
 			},
 			{
-				GameMetadata:                types.GameMetadata{Proxy: common.Address{0x44}},
-				RollupEndpointTotalCount:    3,
-				RollupEndpointNotFoundCount: 0, // All endpoints found - not mixed availability
-				RollupEndpointErrorCount:    0,
+				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x44}},
+				NodeEndpointTotalCount:    3,
+				NodeEndpointNotFoundCount: 0, // All endpoints found - not mixed availability
+				NodeEndpointErrorCount:    0,
 			},
 		}
 
@@ -306,7 +308,7 @@ func TestMonitor_MixedAvailabilityMonitorIntegration(t *testing.T) {
 		mixedAvailabilityMonitor := NewMixedAvailability(logger, mixedAvailabilityMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, mixedAvailabilityMonitor.CheckMixedAvailability)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, mixedAvailabilityMonitor.CheckMixedAvailability)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -335,35 +337,35 @@ func TestMonitor_MixedSafetyMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create games with mixed safety scenarios
 		games := []*monTypes.EnrichedGameData{
 			{
-				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x11}},
-				RollupEndpointSafeCount:   2, // Mixed safety: some safe, some unsafe
-				RollupEndpointUnsafeCount: 1,
+				GameMetadata:            types.GameMetadata{Proxy: common.Address{0x11}},
+				NodeEndpointSafeCount:   2, // Mixed safety: some safe, some unsafe
+				NodeEndpointUnsafeCount: 1,
 			},
 			{
-				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x22}},
-				RollupEndpointSafeCount:   3, // All endpoints safe - not mixed safety
-				RollupEndpointUnsafeCount: 0,
+				GameMetadata:            types.GameMetadata{Proxy: common.Address{0x22}},
+				NodeEndpointSafeCount:   3, // All endpoints safe - not mixed safety
+				NodeEndpointUnsafeCount: 0,
 			},
 			{
-				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x33}},
-				RollupEndpointSafeCount:   1, // Mixed safety: some safe, some unsafe
-				RollupEndpointUnsafeCount: 4,
+				GameMetadata:            types.GameMetadata{Proxy: common.Address{0x33}},
+				NodeEndpointSafeCount:   1, // Mixed safety: some safe, some unsafe
+				NodeEndpointUnsafeCount: 4,
 			},
 			{
-				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x44}},
-				RollupEndpointSafeCount:   0, // All endpoints unsafe - not mixed safety
-				RollupEndpointUnsafeCount: 2,
+				GameMetadata:            types.GameMetadata{Proxy: common.Address{0x44}},
+				NodeEndpointSafeCount:   0, // All endpoints unsafe - not mixed safety
+				NodeEndpointUnsafeCount: 2,
 			},
 			{
-				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x55}},
-				RollupEndpointSafeCount:   0, // No safety checks performed - not mixed safety
-				RollupEndpointUnsafeCount: 0,
+				GameMetadata:            types.GameMetadata{Proxy: common.Address{0x55}},
+				NodeEndpointSafeCount:   0, // No safety checks performed - not mixed safety
+				NodeEndpointUnsafeCount: 0,
 			},
 		}
 
@@ -373,7 +375,7 @@ func TestMonitor_MixedSafetyMonitorIntegration(t *testing.T) {
 		mixedSafetyMonitor := NewMixedSafetyMonitor(logger, mixedSafetyMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, mixedSafetyMonitor.CheckMixedSafety)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, mixedSafetyMonitor.CheckMixedSafety)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -389,25 +391,25 @@ func TestMonitor_MixedSafetyMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create games without mixed safety
 		games := []*monTypes.EnrichedGameData{
 			{
-				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x11}},
-				RollupEndpointSafeCount:   5, // All safe
-				RollupEndpointUnsafeCount: 0,
+				GameMetadata:            types.GameMetadata{Proxy: common.Address{0x11}},
+				NodeEndpointSafeCount:   5, // All safe
+				NodeEndpointUnsafeCount: 0,
 			},
 			{
-				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x22}},
-				RollupEndpointSafeCount:   0, // All unsafe
-				RollupEndpointUnsafeCount: 3,
+				GameMetadata:            types.GameMetadata{Proxy: common.Address{0x22}},
+				NodeEndpointSafeCount:   0, // All unsafe
+				NodeEndpointUnsafeCount: 3,
 			},
 			{
-				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x33}},
-				RollupEndpointSafeCount:   0, // No checks performed
-				RollupEndpointUnsafeCount: 0,
+				GameMetadata:            types.GameMetadata{Proxy: common.Address{0x33}},
+				NodeEndpointSafeCount:   0, // No checks performed
+				NodeEndpointUnsafeCount: 0,
 			},
 		}
 
@@ -417,7 +419,7 @@ func TestMonitor_MixedSafetyMonitorIntegration(t *testing.T) {
 		mixedSafetyMonitor := NewMixedSafetyMonitor(logger, mixedSafetyMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, mixedSafetyMonitor.CheckMixedSafety)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, mixedSafetyMonitor.CheckMixedSafety)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -432,15 +434,15 @@ func TestMonitor_MixedSafetyMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create a game with minimal mixed safety (1 safe, 1 unsafe)
 		games := []*monTypes.EnrichedGameData{
 			{
-				GameMetadata:              types.GameMetadata{Proxy: common.Address{0x11}},
-				RollupEndpointSafeCount:   1, // Minimal mixed safety
-				RollupEndpointUnsafeCount: 1,
+				GameMetadata:            types.GameMetadata{Proxy: common.Address{0x11}},
+				NodeEndpointSafeCount:   1, // Minimal mixed safety
+				NodeEndpointUnsafeCount: 1,
 			},
 		}
 
@@ -450,7 +452,7 @@ func TestMonitor_MixedSafetyMonitorIntegration(t *testing.T) {
 		mixedSafetyMonitor := NewMixedSafetyMonitor(logger, mixedSafetyMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, mixedSafetyMonitor.CheckMixedSafety)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, mixedSafetyMonitor.CheckMixedSafety)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -478,36 +480,36 @@ func TestMonitor_DifferentOutputRootMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create games with different output root scenarios
 		games := []*monTypes.EnrichedGameData{
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x11}},
-				RollupEndpointDifferentOutputRoots: true, // Has different output roots
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x11}},
+				NodeEndpointDifferentRoots: true, // Has different output roots
 			},
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x22}},
-				RollupEndpointDifferentOutputRoots: false, // No disagreement
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x22}},
+				NodeEndpointDifferentRoots: false, // No disagreement
 			},
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x33}},
-				RollupEndpointDifferentOutputRoots: true, // Has different output roots
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x33}},
+				NodeEndpointDifferentRoots: true, // Has different output roots
 			},
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x44}},
-				RollupEndpointDifferentOutputRoots: false, // No disagreement
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x44}},
+				NodeEndpointDifferentRoots: false, // No disagreement
 			},
 		}
 
 		extractor := &mockExtractor{games: games}
 		forecast := &mockForecast{}
 		differentOutputRootMetrics := &mockDifferentOutputRootMetrics{}
-		differentOutputRootMonitor := NewDifferentOutputRootMonitor(logger, differentOutputRootMetrics)
+		differentOutputRootMonitor := NewDifferentRootMonitor(logger, differentOutputRootMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, differentOutputRootMonitor.CheckDifferentOutputRoots)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, differentOutputRootMonitor.CheckDifferentRoots)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -523,32 +525,32 @@ func TestMonitor_DifferentOutputRootMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create games without different output roots
 		games := []*monTypes.EnrichedGameData{
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x11}},
-				RollupEndpointDifferentOutputRoots: false, // No disagreement
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x11}},
+				NodeEndpointDifferentRoots: false, // No disagreement
 			},
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x22}},
-				RollupEndpointDifferentOutputRoots: false, // No disagreement
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x22}},
+				NodeEndpointDifferentRoots: false, // No disagreement
 			},
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x33}},
-				RollupEndpointDifferentOutputRoots: false, // No disagreement
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x33}},
+				NodeEndpointDifferentRoots: false, // No disagreement
 			},
 		}
 
 		extractor := &mockExtractor{games: games}
 		forecast := &mockForecast{}
 		differentOutputRootMetrics := &mockDifferentOutputRootMetrics{}
-		differentOutputRootMonitor := NewDifferentOutputRootMonitor(logger, differentOutputRootMetrics)
+		differentOutputRootMonitor := NewDifferentRootMonitor(logger, differentOutputRootMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, differentOutputRootMonitor.CheckDifferentOutputRoots)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, differentOutputRootMonitor.CheckDifferentRoots)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -563,32 +565,32 @@ func TestMonitor_DifferentOutputRootMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create games where all have different output roots
 		games := []*monTypes.EnrichedGameData{
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x11}},
-				RollupEndpointDifferentOutputRoots: true,
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x11}},
+				NodeEndpointDifferentRoots: true,
 			},
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x22}},
-				RollupEndpointDifferentOutputRoots: true,
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x22}},
+				NodeEndpointDifferentRoots: true,
 			},
 			{
-				GameMetadata:                       types.GameMetadata{Proxy: common.Address{0x33}},
-				RollupEndpointDifferentOutputRoots: true,
+				GameMetadata:               types.GameMetadata{Proxy: common.Address{0x33}},
+				NodeEndpointDifferentRoots: true,
 			},
 		}
 
 		extractor := &mockExtractor{games: games}
 		forecast := &mockForecast{}
 		differentOutputRootMetrics := &mockDifferentOutputRootMetrics{}
-		differentOutputRootMonitor := NewDifferentOutputRootMonitor(logger, differentOutputRootMetrics)
+		differentOutputRootMonitor := NewDifferentRootMonitor(logger, differentOutputRootMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, differentOutputRootMonitor.CheckDifferentOutputRoots)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, differentOutputRootMonitor.CheckDifferentRoots)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -603,7 +605,7 @@ func TestMonitor_DifferentOutputRootMonitorIntegration(t *testing.T) {
 			return eth.L1BlockRef{Number: 1, Hash: common.Hash{0xaa}}, nil
 		}
 		monitorInterval := 100 * time.Millisecond
-		cl := clock.NewAdvancingClock(10 * time.Millisecond)
+		cl := clock.NewAdvancingClock()
 		cl.Start()
 
 		// Create empty games list
@@ -612,10 +614,10 @@ func TestMonitor_DifferentOutputRootMonitorIntegration(t *testing.T) {
 		extractor := &mockExtractor{games: games}
 		forecast := &mockForecast{}
 		differentOutputRootMetrics := &mockDifferentOutputRootMetrics{}
-		differentOutputRootMonitor := NewDifferentOutputRootMonitor(logger, differentOutputRootMetrics)
+		differentOutputRootMonitor := NewDifferentRootMonitor(logger, differentOutputRootMetrics)
 
 		monitor := newGameMonitor(context.Background(), logger, cl, metrics.NoopMetrics, monitorInterval, 10*time.Second, fetchHeadBlock,
-			extractor.Extract, forecast.Forecast, differentOutputRootMonitor.CheckDifferentOutputRoots)
+			extractor.Extract, forecast.Forecast, noopAnchorStateCheck, differentOutputRootMonitor.CheckDifferentRoots)
 
 		err := monitor.monitorGames()
 		require.NoError(t, err)
@@ -630,6 +632,6 @@ type mockDifferentOutputRootMetrics struct {
 	recordedCount int
 }
 
-func (m *mockDifferentOutputRootMetrics) RecordDifferentOutputRootGames(count int) {
+func (m *mockDifferentOutputRootMetrics) RecordDifferentRootGames(count int) {
 	m.recordedCount = count
 }

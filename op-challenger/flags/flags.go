@@ -29,7 +29,6 @@ import (
 const EnvVarPrefix = "OP_CHALLENGER"
 
 func prefixEnvVars(names ...string) []string {
-
 	envs := make([]string, 0, len(names))
 	for _, name := range names {
 		envs = append(envs, EnvVarPrefix+"_"+name)
@@ -41,7 +40,6 @@ var (
 	faultDisputeVMs = []gameTypes.GameType{
 		gameTypes.CannonGameType,
 		gameTypes.CannonKonaGameType,
-		gameTypes.SuperCannonGameType,
 		gameTypes.SuperCannonKonaGameType,
 	}
 	// Required Flags
@@ -327,7 +325,7 @@ func checkOutputProviderFlags(ctx *cli.Context) error {
 	return nil
 }
 
-func CheckCannonBaseFlags(ctx *cli.Context) error {
+func CheckCannonBaseFlags(ctx *cli.Context, requireServer bool) error {
 	if ctx.IsSet(flags.NetworkFlagName) &&
 		(RollupConfigFlag.IsSet(ctx, gameTypes.CannonGameType) || L2GenesisFlag.IsSet(ctx, gameTypes.CannonGameType) || L1GenesisFlag.IsSet(ctx, gameTypes.CannonGameType) || ctx.Bool(CannonL2CustomFlag.Name)) {
 		return fmt.Errorf("flag %v can not be used with %v, %v, %v or %v",
@@ -340,29 +338,11 @@ func CheckCannonBaseFlags(ctx *cli.Context) error {
 	if !ctx.IsSet(CannonBinFlag.Name) {
 		return fmt.Errorf("flag %s is required", CannonBinFlag.Name)
 	}
-	if !ctx.IsSet(CannonServerFlag.Name) {
+	if requireServer && !ctx.IsSet(CannonServerFlag.Name) {
 		return fmt.Errorf("flag %s is required", CannonServerFlag.Name)
 	}
 	if !PreStatesURLFlag.IsSet(ctx, gameTypes.CannonGameType) && !ctx.IsSet(CannonPreStateFlag.Name) {
 		return fmt.Errorf("flag %s or %s is required", PreStatesURLFlag.EitherFlagName(gameTypes.CannonGameType), CannonPreStateFlag.Name)
-	}
-	return nil
-}
-
-func CheckSuperCannonFlags(ctx *cli.Context) error {
-	if !ctx.IsSet(SuperNodeRpcFlag.Name) {
-		return fmt.Errorf("flag %v is required", SuperNodeRpcFlag.Name)
-	}
-	if !ctx.IsSet(flags.NetworkFlagName) &&
-		!(RollupConfigFlag.IsSet(ctx, gameTypes.CannonGameType) && L2GenesisFlag.IsSet(ctx, gameTypes.CannonGameType) && DepsetConfigFlag.IsSet(ctx, gameTypes.CannonGameType)) {
-		return fmt.Errorf("flag %v or %v, %v and %v is required",
-			flags.NetworkFlagName,
-			RollupConfigFlag.EitherFlagName(gameTypes.CannonGameType),
-			L2GenesisFlag.EitherFlagName(gameTypes.CannonGameType),
-			DepsetConfigFlag.EitherFlagName(gameTypes.CannonGameType))
-	}
-	if err := CheckCannonBaseFlags(ctx); err != nil {
-		return err
 	}
 	return nil
 }
@@ -382,10 +362,16 @@ func CheckSuperCannonKonaFlags(ctx *cli.Context) error {
 	if err := CheckCannonKonaBaseFlags(ctx, gameTypes.CannonKonaGameType); err != nil {
 		return err
 	}
+	if !ctx.IsSet(CannonKonaServerFlag.Name) {
+		return fmt.Errorf("flag %s is required", CannonKonaServerFlag.Name)
+	}
+	if !PreStatesURLFlag.IsSet(ctx, gameTypes.CannonKonaGameType) && !ctx.IsSet(CannonKonaPreStateFlag.Name) {
+		return fmt.Errorf("flag %s or %s is required", PreStatesURLFlag.EitherFlagName(gameTypes.CannonKonaGameType), CannonKonaPreStateFlag.Name)
+	}
 	return nil
 }
 
-func CheckCannonFlags(ctx *cli.Context) error {
+func CheckCannonFlags(ctx *cli.Context, requireServer bool) error {
 	if err := checkOutputProviderFlags(ctx); err != nil {
 		return err
 	}
@@ -394,7 +380,7 @@ func CheckCannonFlags(ctx *cli.Context) error {
 		return fmt.Errorf("flag %v or %v and %v is required",
 			flags.NetworkFlagName, RollupConfigFlag.EitherFlagName(gameTypes.CannonGameType), L2GenesisFlag.EitherFlagName(gameTypes.CannonGameType))
 	}
-	if err := CheckCannonBaseFlags(ctx); err != nil {
+	if err := CheckCannonBaseFlags(ctx, requireServer); err != nil {
 		return err
 	}
 	return nil
@@ -445,22 +431,21 @@ func CheckRequired(ctx *cli.Context, types []gameTypes.GameType) error {
 	for _, gameType := range types {
 		switch gameType {
 		case gameTypes.CannonGameType, gameTypes.PermissionedGameType:
-			if err := CheckCannonFlags(ctx); err != nil {
+			// The permissioned game never reaches step() so does not run op-program; only the
+			// legacy Cannon game type requires the op-program server binary.
+			requireServer := slices.Contains(types, gameTypes.CannonGameType)
+			if err := CheckCannonFlags(ctx, requireServer); err != nil {
 				return err
 			}
 		case gameTypes.CannonKonaGameType:
 			if err := CheckCannonKonaFlags(ctx); err != nil {
 				return err
 			}
-		case gameTypes.SuperCannonGameType, gameTypes.SuperPermissionedGameType:
-			if err := CheckSuperCannonFlags(ctx); err != nil {
-				return err
-			}
 		case gameTypes.SuperCannonKonaGameType:
 			if err := CheckSuperCannonKonaFlags(ctx); err != nil {
 				return err
 			}
-		case gameTypes.OptimisticZKGameType, gameTypes.AlphabetGameType, gameTypes.FastGameType:
+		case gameTypes.ZKDisputeGameType, gameTypes.AlphabetGameType, gameTypes.FastGameType:
 			if err := checkOutputProviderFlags(ctx); err != nil {
 				return err
 			}

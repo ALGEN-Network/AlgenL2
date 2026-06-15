@@ -9,12 +9,11 @@ import { Solarray } from "scripts/libraries/Solarray.sol";
 import { ChainAssertions } from "scripts/deploy/ChainAssertions.sol";
 import { Constants as ScriptConstants } from "scripts/libraries/Constants.sol";
 import { Types } from "scripts/libraries/Types.sol";
-import { SemverComp } from "src/libraries/SemverComp.sol";
 
 import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
-import { IOPContractsManager } from "interfaces/L1/IOPContractsManager.sol";
 import { IOPContractsManagerV2 } from "interfaces/L1/opcm/IOPContractsManagerV2.sol";
 import { IOPContractsManagerUtils } from "interfaces/L1/opcm/IOPContractsManagerUtils.sol";
+import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
 import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
 import { IDisputeGameFactory } from "interfaces/dispute/IDisputeGameFactory.sol";
@@ -28,14 +27,15 @@ import { IL1ERC721Bridge } from "interfaces/L1/IL1ERC721Bridge.sol";
 import { IL1StandardBridge } from "interfaces/L1/IL1StandardBridge.sol";
 import { IOptimismMintableERC20Factory } from "interfaces/universal/IOptimismMintableERC20Factory.sol";
 import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
-import { GameTypes } from "src/dispute/lib/Types.sol";
+import { GameType, GameTypes } from "src/dispute/lib/Types.sol";
+import { DevFeatures } from "src/libraries/DevFeatures.sol";
 
 contract DeployOPChain is Script {
     /// @notice The default init bond for the dispute games.
     uint256 public constant DEFAULT_INIT_BOND = 0.08 ether;
 
-    /// @notice Whether to use OPCM v2.
-    bool public isOPCMv2;
+    /// @notice Whether the OPCM has SUPER_ROOT_GAMES_MIGRATION enabled.
+    bool public isSuperRoot;
 
     /// @notice The output of the DeployOPChain script. This is the same as the DeployOPChainOutput type in the
     /// op-deployer package.
@@ -73,26 +73,15 @@ contract DeployOPChain is Script {
     function run(Types.DeployOPChainInput memory _input) public returns (Output memory output_) {
         checkInput(_input);
 
-        // Check if OPCM v2 should be used, both v1 and v2 share the same interface for this function.
         require(address(_input.opcm).code.length > 0, "DeployOPChain: OPCM address has no code");
-        isOPCMv2 = SemverComp.gte(IOPContractsManager(_input.opcm).version(), Constants.OPCM_V2_MIN_VERSION);
 
-        if (isOPCMv2) {
-            IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_input.opcm);
-            IOPContractsManagerV2.FullConfig memory config = _toOPCMV2DeployInput(_input);
+        IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_input.opcm);
+        isSuperRoot = DevFeatures.isDevFeatureEnabled(opcmV2.devFeatureBitmap(), DevFeatures.SUPER_ROOT_GAMES_MIGRATION);
+        IOPContractsManagerV2.FullConfig memory config = _toOPCMV2DeployInput(_input);
 
-            vm.broadcast(msg.sender);
-            IOPContractsManagerV2.ChainContracts memory chainContracts = opcmV2.deploy(config);
-            output_ = _fromOPCMV2OutputToOutput(chainContracts);
-        } else {
-            IOPContractsManager opcm = IOPContractsManager(_input.opcm);
-            IOPContractsManager.DeployInput memory deployInput = _toOPCMV1DeployInput(_input);
-
-            vm.broadcast(msg.sender);
-            IOPContractsManager.DeployOutput memory deployOutput = opcm.deploy(deployInput);
-
-            output_ = _fromOPCMV1OutputToOutput(deployOutput);
-        }
+        vm.broadcast(msg.sender);
+        IOPContractsManagerV2.ChainContracts memory chainContracts = opcmV2.deploy(config);
+        output_ = _fromOPCMV2OutputToOutput(chainContracts);
 
         checkOutput(_input, output_);
 
@@ -115,92 +104,95 @@ contract DeployOPChain is Script {
 
     // -------- Features --------
 
-    /// @notice Converts Types.DeployOPChainInput to IOPContractsManager.DeployInput.
-    /// @param _input The input parameters.
-    /// @return deployInput_ The deployed input parameters.
-    function _toOPCMV1DeployInput(Types.DeployOPChainInput memory _input)
-        internal
-        pure
-        returns (IOPContractsManager.DeployInput memory deployInput_)
-    {
-        IOPContractsManager.Roles memory roles = IOPContractsManager.Roles({
-            opChainProxyAdminOwner: _input.opChainProxyAdminOwner,
-            systemConfigOwner: _input.systemConfigOwner,
-            batcher: _input.batcher,
-            unsafeBlockSigner: _input.unsafeBlockSigner,
-            proposer: _input.proposer,
-            challenger: _input.challenger
-        });
-        deployInput_ = IOPContractsManager.DeployInput({
-            roles: roles,
-            basefeeScalar: _input.basefeeScalar,
-            blobBasefeeScalar: _input.blobBaseFeeScalar,
-            l2ChainId: _input.l2ChainId,
-            startingAnchorRoot: startingAnchorRoot(),
-            saltMixer: _input.saltMixer,
-            gasLimit: _input.gasLimit,
-            disputeGameType: _input.disputeGameType,
-            disputeAbsolutePrestate: _input.disputeAbsolutePrestate,
-            disputeMaxGameDepth: _input.disputeMaxGameDepth,
-            disputeSplitDepth: _input.disputeSplitDepth,
-            disputeClockExtension: _input.disputeClockExtension,
-            disputeMaxClockDuration: _input.disputeMaxClockDuration,
-            useCustomGasToken: _input.useCustomGasToken
-        });
-    }
-
     /// @notice Converts Types.DeployOPChainInput to IOPContractsManagerV2.FullConfig.
     /// @param _input The input parameters.
     /// @return config_ The deployed input parameters.
     function _toOPCMV2DeployInput(Types.DeployOPChainInput memory _input)
         internal
-        pure
+        view
         returns (IOPContractsManagerV2.FullConfig memory config_)
     {
-        // Build dispute game configs - OPCMV2 requires exactly 3 configs: CANNON, PERMISSIONED_CANNON, CANNON_KONA
-        IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
-            new IOPContractsManagerUtils.DisputeGameConfig[](3);
+        // Only PERMISSIONED_CANNON is allowed for initial deployment since no prestate exists for permissionless games.
+        require(
+            _input.disputeGameType.raw() == GameTypes.PERMISSIONED_CANNON.raw(),
+            "DeployOPChain: only PERMISSIONED_CANNON game type is supported for initial deployment"
+        );
 
-        // Determine which games should be enabled based on the starting respected game type
-        bool cannonEnabled = _input.disputeGameType.raw() == GameTypes.CANNON.raw();
-        bool permissionedCannonEnabled = true; // PERMISSIONED_CANNON must always be enabled
-        bool cannonKonaEnabled = _input.disputeGameType.raw() == GameTypes.CANNON_KONA.raw();
-
-        // Config 0: CANNON
-        IOPContractsManagerUtils.FaultDisputeGameConfig memory cannonConfig =
-            IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: _input.disputeAbsolutePrestate });
-
-        disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
-            enabled: cannonEnabled,
-            initBond: cannonEnabled ? DEFAULT_INIT_BOND : 0,
-            gameType: GameTypes.CANNON,
-            gameArgs: abi.encode(cannonConfig)
-        });
-
-        // Config 1: PERMISSIONED_CANNON (must be enabled)
+        // Shared permissioned game config for legacy permissioned games.
         IOPContractsManagerUtils.PermissionedDisputeGameConfig memory pdgConfig = IOPContractsManagerUtils
             .PermissionedDisputeGameConfig({
             absolutePrestate: _input.disputeAbsolutePrestate,
             proposer: _input.proposer,
             challenger: _input.challenger
         });
+        IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig memory superPdgConfig =
+            IOPContractsManagerUtils.SuperPermissionedDisputeGameConfig({ proposer: _input.proposer });
 
-        disputeGameConfigs[1] = IOPContractsManagerUtils.DisputeGameConfig({
-            enabled: permissionedCannonEnabled,
-            initBond: DEFAULT_INIT_BOND,
-            gameType: GameTypes.PERMISSIONED_CANNON,
-            gameArgs: abi.encode(pdgConfig)
+        // Build dispute game configs - OPCMV2 requires all 6 game type configs.
+        // Order must match validGameTypes in OPContractsManagerV2._assertValidFullConfig().
+        IOPContractsManagerUtils.DisputeGameConfig[] memory disputeGameConfigs =
+            new IOPContractsManagerUtils.DisputeGameConfig[](6);
+
+        // Config 0: CANNON (disabled for initial deployment — no prestate exists)
+        disputeGameConfigs[0] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false,
+            initBond: 0,
+            gameType: GameTypes.CANNON,
+            gameArgs: bytes("")
         });
 
-        // Config 2: CANNON_KONA
-        IOPContractsManagerUtils.FaultDisputeGameConfig memory cannonKonaConfig =
-            IOPContractsManagerUtils.FaultDisputeGameConfig({ absolutePrestate: _input.disputeAbsolutePrestate });
+        // Config 1: PERMISSIONED_CANNON — enabled only in non-super-root mode.
+        disputeGameConfigs[1] = isSuperRoot
+            ? IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: false,
+                initBond: 0,
+                gameType: GameTypes.PERMISSIONED_CANNON,
+                gameArgs: bytes("")
+            })
+            : IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: true,
+                initBond: DEFAULT_INIT_BOND,
+                gameType: GameTypes.PERMISSIONED_CANNON,
+                gameArgs: abi.encode(pdgConfig)
+            });
 
+        // Config 2: CANNON_KONA (disabled for initial deployment — no prestate exists)
         disputeGameConfigs[2] = IOPContractsManagerUtils.DisputeGameConfig({
-            enabled: cannonKonaEnabled,
-            initBond: cannonKonaEnabled ? DEFAULT_INIT_BOND : 0,
+            enabled: false,
+            initBond: 0,
             gameType: GameTypes.CANNON_KONA,
-            gameArgs: abi.encode(cannonKonaConfig)
+            gameArgs: bytes("")
+        });
+
+        // Config 3: SUPER_PERMISSIONED_CANNON — enabled only in super-root mode.
+        disputeGameConfigs[3] = isSuperRoot
+            ? IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: true,
+                initBond: 0,
+                gameType: GameTypes.SUPER_PERMISSIONED_CANNON,
+                gameArgs: abi.encode(superPdgConfig)
+            })
+            : IOPContractsManagerUtils.DisputeGameConfig({
+                enabled: false,
+                initBond: 0,
+                gameType: GameTypes.SUPER_PERMISSIONED_CANNON,
+                gameArgs: bytes("")
+            });
+
+        // Config 4: SUPER_CANNON_KONA (disabled for initial deployment)
+        disputeGameConfigs[4] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false,
+            initBond: 0,
+            gameType: GameTypes.SUPER_CANNON_KONA,
+            gameArgs: bytes("")
+        });
+
+        // Config 5: ZK_DISPUTE_GAME (disabled for initial deployment)
+        disputeGameConfigs[5] = IOPContractsManagerUtils.DisputeGameConfig({
+            enabled: false,
+            initBond: 0,
+            gameType: GameTypes.ZK_DISPUTE_GAME,
+            gameArgs: bytes("")
         });
 
         config_ = IOPContractsManagerV2.FullConfig({
@@ -211,12 +203,12 @@ contract DeployOPChain is Script {
             unsafeBlockSigner: _input.unsafeBlockSigner,
             batcher: _input.batcher,
             startingAnchorRoot: ScriptConstants.DEFAULT_OUTPUT_ROOT(),
-            startingRespectedGameType: _input.disputeGameType,
+            startingRespectedGameType: isSuperRoot ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON,
             basefeeScalar: _input.basefeeScalar,
             blobBasefeeScalar: _input.blobBaseFeeScalar,
             gasLimit: _input.gasLimit,
             l2ChainId: _input.l2ChainId,
-            resourceConfig: Constants.DEFAULT_RESOURCE_CONFIG(),
+            resourceConfig: _resourceConfigForGasLimit(_input.gasLimit),
             disputeGameConfigs: disputeGameConfigs,
             useCustomGasToken: _input.useCustomGasToken
         });
@@ -230,9 +222,8 @@ contract DeployOPChain is Script {
         view
         returns (Output memory output_)
     {
-        // PERMISSIONED_CANNON must be enabled.
-        address permissionedDgImpl =
-            address(_chainContracts.disputeGameFactory.gameImpls(GameTypes.PERMISSIONED_CANNON));
+        GameType permGameType = isSuperRoot ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON;
+        address permissionedDgImpl = address(_chainContracts.disputeGameFactory.gameImpls(permGameType));
 
         output_ = Output({
             opChainProxyAdmin: _chainContracts.proxyAdmin,
@@ -254,31 +245,40 @@ contract DeployOPChain is Script {
         });
     }
 
-    /// @notice Converts IOPContractsManager.DeployOutput to Output.
-    /// @param _deployOutput The deploy output.
-    /// @return output_ The output parameters.
-    function _fromOPCMV1OutputToOutput(IOPContractsManager.DeployOutput memory _deployOutput)
+    /// @notice Derives a ResourceConfig sized to fit the requested L2 gas limit.
+    ///
+    ///         For gasLimit >= the default's reserved gas (maxResourceLimit + systemTxMaxGas),
+    ///         returns DEFAULT_RESOURCE_CONFIG unchanged. Every existing production chain takes
+    ///         this branch.
+    ///
+    ///         For smaller gasLimits, shrinks maxResourceLimit to fit while preserving
+    ///         systemTxMaxGas and the EIP-1559 parameters, so the L1 attributes deposit
+    ///         reservation stays constant and deposit throughput scales with chain size.
+    ///         maxResourceLimit is rounded down to a multiple of elasticityMultiplier to
+    ///         satisfy SystemConfig._setResourceConfig's precision-loss check.
+    /// @param _gasLimit The requested L2 gas limit.
+    /// @return cfg_ A ResourceConfig that satisfies maxResourceLimit + systemTxMaxGas <= _gasLimit.
+    function _resourceConfigForGasLimit(uint64 _gasLimit)
         internal
         pure
-        returns (Output memory output_)
+        returns (IResourceMetering.ResourceConfig memory cfg_)
     {
-        output_ = Output({
-            opChainProxyAdmin: _deployOutput.opChainProxyAdmin,
-            addressManager: _deployOutput.addressManager,
-            l1ERC721BridgeProxy: _deployOutput.l1ERC721BridgeProxy,
-            systemConfigProxy: _deployOutput.systemConfigProxy,
-            optimismMintableERC20FactoryProxy: _deployOutput.optimismMintableERC20FactoryProxy,
-            l1StandardBridgeProxy: _deployOutput.l1StandardBridgeProxy,
-            l1CrossDomainMessengerProxy: _deployOutput.l1CrossDomainMessengerProxy,
-            optimismPortalProxy: _deployOutput.optimismPortalProxy,
-            ethLockboxProxy: _deployOutput.ethLockboxProxy,
-            disputeGameFactoryProxy: _deployOutput.disputeGameFactoryProxy,
-            anchorStateRegistryProxy: _deployOutput.anchorStateRegistryProxy,
-            faultDisputeGame: _deployOutput.faultDisputeGame,
-            permissionedDisputeGame: _deployOutput.permissionedDisputeGame,
-            delayedWETHPermissionedGameProxy: _deployOutput.delayedWETHPermissionedGameProxy,
-            delayedWETHPermissionlessGameProxy: _deployOutput.delayedWETHPermissionlessGameProxy
-        });
+        cfg_ = Constants.DEFAULT_RESOURCE_CONFIG();
+        uint64 reserved = uint64(cfg_.maxResourceLimit) + uint64(cfg_.systemTxMaxGas);
+        if (_gasLimit >= reserved) {
+            return cfg_;
+        }
+
+        require(_gasLimit > uint64(cfg_.systemTxMaxGas), "DeployOPChain: gasLimit must exceed systemTxMaxGas");
+        // Branch is only reached for _gasLimit < reserved (~21M for the current default), well
+        // within uint32, so the downcast on assignment cannot truncate.
+        uint64 available = _gasLimit - uint64(cfg_.systemTxMaxGas);
+        uint64 mult = uint64(cfg_.elasticityMultiplier);
+
+        // Satisfy the SystemConfig._setResourceConfig requirement that the maxResourceLimit is
+        // a multiple of the elasticityMultiplier.
+        cfg_.maxResourceLimit = uint32((available / mult) * mult);
+        require(cfg_.maxResourceLimit > 0, "DeployOPChain: gasLimit too small for any deposit budget");
     }
 
     // -------- Validations --------
@@ -353,28 +353,19 @@ contract DeployOPChain is Script {
             ETHLockbox: address(_o.ethLockboxProxy),
             SystemConfig: address(_o.systemConfigProxy),
             L1ERC721Bridge: address(_o.l1ERC721BridgeProxy),
-            ProtocolVersions: address(0),
             SuperchainConfig: address(_i.superchainConfig)
         });
 
         // Check dispute games and get superchain config
-        address expectedPDGImpl = address(_o.permissionedDisputeGame);
+        IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_i.opcm);
+        address expectedPDGImpl = isSuperRoot
+            ? opcmV2.implementations().superPermissionedDisputeGameImpl
+            : opcmV2.implementations().permissionedDisputeGameImpl;
 
-        if (isOPCMv2) {
-            // OPCM v2: use implementations from v2 contract
-            IOPContractsManagerV2 opcmV2 = IOPContractsManagerV2(_i.opcm);
-            expectedPDGImpl = opcmV2.implementations().permissionedDisputeGameImpl;
-        } else {
-            // OPCM v1: use implementations from v1 contract
-            IOPContractsManager opcm = IOPContractsManager(_i.opcm);
-            // With v2 game contracts enabled, we use the predeployed pdg implementation
-            expectedPDGImpl = opcm.implementations().permissionedDisputeGameImpl;
-        }
-
+        GameType permGameType = isSuperRoot ? GameTypes.SUPER_PERMISSIONED_CANNON : GameTypes.PERMISSIONED_CANNON;
         ChainAssertions.checkDisputeGameFactory(
-            _o.disputeGameFactoryProxy, _i.opChainProxyAdminOwner, expectedPDGImpl, true
+            _o.disputeGameFactoryProxy, _i.opChainProxyAdminOwner, expectedPDGImpl, true, permGameType
         );
-
         ChainAssertions.checkAnchorStateRegistryProxy(_o.anchorStateRegistryProxy, true);
         ChainAssertions.checkL1CrossDomainMessenger(_o.l1CrossDomainMessengerProxy, vm, true);
         ChainAssertions.checkOptimismPortal2({
@@ -486,7 +477,7 @@ contract DeployOPChain is Script {
         // support deploying straight to permissioned games, and the starting root does not
         // matter for that, as long as it is non-zero, since no games will be played. We do not
         // deploy the permissionless game (and therefore do not set a starting root for it here)
-        // because to to update to the permissionless game, we will need to update its starting
+        // because updating to the permissionless game will require updating its starting
         // anchor root and deploy a new permissioned dispute game contract anyway.
         //
         // You can `console.logBytes(abi.encode(ScriptConstants.DEFAULT_OUTPUT_ROOT()))` to get the bytes that

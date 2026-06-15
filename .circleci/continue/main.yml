@@ -1,22 +1,40 @@
 version: 2.1
 
 parameters:
+  c-default_docker_image:
+    type: string
+    default: cimg/base:2026.03
+  c-rust_base_image:
+    type: string
+    default: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-base-clang@sha256:758f67c7212e7d05c3d02c34f26766ef86f657d3bb811da07cc01e37b736ebef
+  c-base_image:
+    type: string
+    default: default
+  c-github-event-base64:
+    type: string
+    default: "__not_set__"
+  # go-cache-version can be used as a cache buster when making breaking changes to caching strategy
+  c-go-cache-version:
+    type: string
+    default: "v0.0"
+  c-publish_contract_artifacts_ref:
+    type: string
+    default: ""
+  # CircleCI forwards user-supplied setup params into continuation validation.
+  # These aliases are transformed into c-* params by config.yml and are not
+  # referenced by jobs in the continuation config.
   default_docker_image:
     type: string
-    default: cimg/base:2024.01
+    default: cimg/base:2026.03
+  rust_base_image:
+    type: string
+    default: us-docker.pkg.dev/oplabs-tools-artifacts/images/ci-base-clang@sha256:d79c625a042269c64b2444ef1edf9bb4a399d1c892caee57f9021be067da5617
   base_image:
     type: string
     default: default
-  # The dispatch parameters are used to manually dispatch pipelines that normally only run post-merge on develop
-  # from the CircleCI UI. Example configuration:
-  #   when:
-  #     or:
-  #       - equal: [ "develop", <<pipeline.git.branch>> ]
-  #       - equal: [ true, <<pipeline.parameters.main_dispatch>> ]
-  # Add a new `*_dispatch` parameter for any pipeline you want manual dispatch for.
   main_dispatch:
     type: boolean
-    default: true # default to running main in case the manual run cancelled an automatic run
+    default: true
   fault_proofs_dispatch:
     type: boolean
     default: false
@@ -32,12 +50,12 @@ parameters:
   sdk_dispatch:
     type: boolean
     default: false
-  docker_publish_dispatch:
-    type: boolean
-    default: false
   publish_contract_artifacts_dispatch:
     type: boolean
     default: false
+  publish_contract_artifacts_ref:
+    type: string
+    default: ""
   stale_check_dispatch:
     type: boolean
     default: false
@@ -47,13 +65,13 @@ parameters:
   heavy_fuzz_dispatch:
     type: boolean
     default: false
-  acceptance_tests_dispatch:
+  rust_ci_dispatch:
     type: boolean
     default: false
-  sync_test_op_node_dispatch:
+  rust_e2e_dispatch:
     type: boolean
     default: false
-  ai_contracts_test_dispatch:
+  l2_fork_test_dispatch:
     type: boolean
     default: false
   github-event-type:
@@ -65,33 +83,71 @@ parameters:
   github-event-base64:
     type: string
     default: "__not_set__"
-  devnet-metrics-collect:
-    type: boolean
-    default: false
-  flake-shake-dispatch:
-    type: boolean
-    default: false
-  flake-shake-iterations:
-    type: integer
-    default: 300
-  flake-shake-workers:
-    type: integer
-    default: 50
-  # go-cache-version can be used as a cache buster when making breaking changes to caching strategy
   go-cache-version:
     type: string
     default: "v0.0"
+  # Workflow activation flags (set by the decision tree in config.yml)
+  c-run_main:
+    type: boolean
+    default: false
+  c-run_release:
+    type: boolean
+    default: false
+  c-run_scheduled_todo_issues:
+    type: boolean
+    default: false
+  c-run_develop_fault_proofs:
+    type: boolean
+    default: false
+  c-run_develop_kontrol_tests:
+    type: boolean
+    default: false
+  c-run_scheduled_cannon_full_tests:
+    type: boolean
+    default: false
+  c-run_scheduled_preimage_reproducibility:
+    type: boolean
+    default: false
+  c-run_scheduled_stale_check:
+    type: boolean
+    default: false
+  c-run_scheduled_heavy_fuzz_tests:
+    type: boolean
+    default: false
+  c-run_close_issue:
+    type: boolean
+    default: false
+  c-run_l2_fork_test:
+    type: boolean
+    default: false
+  c-run_scheduled_weekly_tests:
+    type: boolean
+    default: false
+  c-run_contracts_feature_tests:
+    type: boolean
+    default: false
+  c-run_contracts_feature_tests_short:
+    type: boolean
+    default: false
+  c-run_ci_gate_skip:
+    type: boolean
+    default: false
+  c-run_publish_contract_artifacts:
+    type: boolean
+    default: false
 
 orbs:
+  utils: ethereum-optimism/circleci-utils@1.0.27
   go: circleci/go@1.8.0
   gcp-cli: circleci/gcp-cli@3.0.1
   slack: circleci/slack@6.0.0
   shellcheck: circleci/shellcheck@3.2.0
-  codecov: codecov/codecov@5.0.3
-  utils: ethereum-optimism/circleci-utils@1.0.23
   docker: circleci/docker@2.8.2
   github-cli: circleci/github-cli@2.7.0
 
+# ============================================================================
+# COMMANDS
+# ============================================================================
 commands:
   gcp-oidc-authenticate:
     description: "Authenticate with GCP using a CircleCI OIDC token."
@@ -118,9 +174,7 @@ commands:
       - run:
           name: "Create OIDC credential configuration"
           command: |
-            # Store OIDC token in temp file
             echo $CIRCLE_OIDC_TOKEN > << parameters.oidc_token_file_path >>
-            # Create a credential configuration for the generated OIDC ID Token
             gcloud iam workload-identity-pools create-cred-config \
                 "projects/${<< parameters.project_id >>}/locations/global/workloadIdentityPools/${<< parameters.workload_identity_pool_id >>}/providers/${<< parameters.workload_identity_pool_provider_id >>}"\
                 --output-file="<< parameters.gcp_cred_config_file_path >>" \
@@ -129,25 +183,88 @@ commands:
       - run:
           name: "Authenticate with GCP using OIDC"
           command: |
-            # Configure gcloud to leverage the generated credential configuration
             gcloud auth login --brief --cred-file "<< parameters.gcp_cred_config_file_path >>"
-            # Configure ADC
             echo "export GOOGLE_APPLICATION_CREDENTIALS='<< parameters.gcp_cred_config_file_path >>'" | tee -a "$BASH_ENV"
 
-  clean-old-acceptor-logs:
-    description: "Delete op-acceptor testrun logs older than 60 days (prevents disk bloat across workspace attaches/reruns)."
+  rust-sccache-setup:
+    description: >
+      sccache GCS compile cache for the Rust build jobs. The GCP Workload
+      Identity coords, reader service account, and bucket come from the
+      sccache-gcs-optimism CircleCI context; the read-only reader is the default
+      for every ref and develop overrides to the writer. The write/read split is
+      enforced by GCP Workload Identity on the signed CircleCI OIDC vcs-ref claim,
+      so a non-develop ref impersonating the writer is denied by GCP; this only
+      selects the SA. sccache is preinstalled in the ci-base-clang image.
+
+      Not fail-open: if the sccache server can't start, the job fails so a broken
+      cache is fixed rather than silently masked. Requires the context (so every
+      job invoking this command must carry sccache-gcs-optimism).
+    parameters:
+      enabled:
+        description: "Master switch for the GCS compile cache."
+        type: boolean
+        default: true
     steps:
-      - run:
-          name: Cleanup old op-acceptor testrun logs (>60 days)
-          command: |
-            set -eu
-            for base in "op-acceptor/logs" "op-acceptance-tests/logs"; do
-              if [ -d "$base" ]; then
-                echo "Scanning $base for old testrun-* directories..."
-                # Remove any testrun-* directories older than 60 days
-                find "$base" -type d -name 'testrun-*' -mtime +60 -print -exec rm -rf {} +
-              fi
-            done
+      - when:
+          condition: << parameters.enabled >>
+          steps:
+            # sccache tuning + read-only as the safe default for every ref.
+            - run:
+                name: "sccache read-only default + tuning"
+                command: |
+                  {
+                    echo "export SCCACHE_GCS_KEY_PREFIX=sccache"
+                    echo "export SCCACHE_GCS_RW_MODE=READ_ONLY"
+                    echo "export SCCACHE_ERROR_LOG=/tmp/sccache.log"
+                    echo "export SCCACHE_LOG=warn"
+                    echo "export SCCACHE_IDLE_TIMEOUT=0"
+                    # Required for sccache to cache rustc output. rust-setup-env
+                    # also sets this, but rust-build-vendored does not run it.
+                    echo "export CARGO_INCREMENTAL=0"
+                  } >> "$BASH_ENV"
+            # develop overrides to the writer identity. This selects the SA only;
+            # write access is enforced by GCP Workload Identity, which grants write
+            # solely to refs/heads/develop. Tag builds (empty branch) and the merge
+            # queue (gh-readonly-queue/*) intentionally stay read-only — GCP would
+            # deny them write regardless. Keep this condition in lockstep with the
+            # GCP vcs_origin_ref binding on the sccache-writer service account.
+            - when:
+                condition:
+                  equal: ["develop", << pipeline.git.branch >>]
+                steps:
+                  - run:
+                      name: "sccache GCS identity: read/write (develop)"
+                      command: |
+                        {
+                          echo "export GCP_SERVICE_ACCOUNT_EMAIL=sccache-writer@oplabs-tools-artifacts.iam.gserviceaccount.com"
+                          echo "export SCCACHE_GCS_RW_MODE=READ_WRITE"
+                        } >> "$BASH_ENV"
+            - run:
+                name: "Start sccache"
+                command: |
+                  # Skip where sccache is not installed (machine-executor jobs like
+                  # the cannon builds run on a VM, not the ci-base-clang image). This
+                  # is NOT fail-open for a broken cache: if sccache IS present, a
+                  # failed server start below still fails the job.
+                  if ! command -v sccache >/dev/null 2>&1; then
+                    echo "sccache not installed on this executor; skipping (no cache)"
+                    exit 0
+                  fi
+                  # Build a Workload Identity ADC config (no gcloud needed); sccache
+                  # reads it via GOOGLE_APPLICATION_CREDENTIALS. Coords come from the
+                  # sccache-gcs-optimism context.
+                  printf '%s' "${CIRCLE_OIDC_TOKEN:-}" > /tmp/sccache_oidc_token
+                  printf '{"type":"external_account","audience":"//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/%s","subject_token_type":"urn:ietf:params:oauth:token-type:jwt","token_url":"https://sts.googleapis.com/v1/token","service_account_impersonation_url":"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateAccessToken","credential_source":{"file":"/tmp/sccache_oidc_token","format":{"type":"text"}}}' \
+                    "$GCP_PROJECT_ID" "$GCP_WIP_ID" "$GCP_WIP_PROVIDER_ID" "$GCP_SERVICE_ACCOUNT_EMAIL" > /tmp/sccache_gcp_cred.json
+                  export GOOGLE_APPLICATION_CREDENTIALS=/tmp/sccache_gcp_cred.json
+                  # No fail-open: if the server can't start, fail the job loudly so a
+                  # broken cache is fixed, not silently tolerated.
+                  sccache --start-server
+                  sccache --show-stats
+                  {
+                    echo "export GOOGLE_APPLICATION_CREDENTIALS=/tmp/sccache_gcp_cred.json"
+                    echo "export RUSTC_WRAPPER=sccache"
+                  } >> "$BASH_ENV"
 
   check-changed:
     description: "Conditionally halts a step if certain modules change"
@@ -166,7 +283,6 @@ commands:
             CHECK_CHANGED_NO_GO_DEPS: "<<parameters.no_go_deps>>"
           command: |
             cd ops/check-changed
-            pip3 install -r requirements.txt
             python3 main.py "<<parameters.patterns>>"
 
   install-solc-compilers:
@@ -181,6 +297,10 @@ commands:
           keys:
             # use mise.toml to anchor on the underlying forge/svm versions
             - svm-cache-{{ checksum "mise.toml" }}-<<parameters.solc_versions>>
+            # Fall back to any svm cache for the same forge/svm versions so a
+            # changed solc_versions list reuses what's there and installs only
+            # the difference instead of a full cold install.
+            - svm-cache-{{ checksum "mise.toml" }}-
       - run:
           name: Install solc compilers
           command: |
@@ -227,24 +347,40 @@ commands:
           branch_pattern: develop
           mentions: "<< parameters.mentions >>"
 
+  apt-install:
+    description: "apt-get update + install, with retries to tolerate transient Ubuntu mirror sync failures."
+    parameters:
+      packages:
+        description: "Space-separated list of apt packages to install."
+        type: string
+      extra_flags:
+        description: "Extra flags to pass to apt-get install (e.g. '--no-install-recommends')."
+        type: string
+        default: ""
+    steps:
+      - run:
+          name: "apt install << parameters.packages >>"
+          command: |
+            export NEEDRESTART_MODE=a
+            for i in 1 2 3; do
+              if sudo -E apt-get -o Acquire::Retries=5 update; then
+                break
+              fi
+              if [ "$i" = "3" ]; then
+                echo "apt-get update failed after 3 attempts" >&2
+                exit 1
+              fi
+              echo "apt-get update failed (attempt $i), retrying in 10s..." >&2
+              sleep 10
+            done
+            sudo -E apt-get install -y << parameters.extra_flags >> << parameters.packages >>
+
+  # Kona-specific commands
   install-zstd:
     description: "Install zstd compression utility"
     steps:
-      - run:
-          name: Install zstd
-          command: sudo apt-get update && sudo apt-get install -y zstd=1.4.8*
-
-  install-cargo-binstall:
-    description: "Install cargo-binstall for fast binary installations"
-    steps:
-      - run:
-          name: Install cargo-binstall
-          command: |
-            if command -v cargo-binstall >/dev/null 2>&1; then
-              echo "cargo-binstall already installed"
-              exit 0
-            fi
-            curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+      - apt-install:
+          packages: "zstd"
 
   get-target-branch:
     description: "Determine the PR target branch and export TARGET_BRANCH for subsequent steps"
@@ -305,149 +441,9 @@ commands:
               fi
             fi
 
-  run-contracts-check:
-    parameters:
-      command:
-        description: Just command that runs the check
-        type: string
-    steps:
-      - run:
-          name: <<parameters.command>>
-          command: |
-            git reset --hard
-            git clean -df
-            just <<parameters.command>>
-            git status --porcelain
-            [ -z "$(git status --porcelain)" ] || exit 1
-          working_directory: packages/contracts-bedrock
-          when: always
-          environment:
-            FOUNDRY_PROFILE: ci
-
-  go-restore-cache:
-    parameters:
-      # The go module to cache for. If the go module does not come with its own go.mod and go.sum,
-      # "." can be used to point to the root go.mod and go.sum
-      module:
-        type: string
-        default: .
-      # Since many builds can run off the same go.mod/go.sum, we'll namespace the caches
-      namespace:
-        type: string
-      # Version can be used as a cache buster when making breaking changes to caching strategy
-      version:
-        type: string
-        default: <<pipeline.parameters.go-cache-version>>
-    steps:
-      - restore_cache:
-          name: Restore go cache for <<parameters.namespace>> (<<parameters.module>>/go.mod)
-          keys:
-            - go-<<parameters.namespace>>-<<parameters.version>>-<<parameters.module>>-{{ checksum "<<parameters.module>>/go.mod" }}-{{ checksum "<<parameters.module>>/go.sum" }}
-            - go-<<parameters.namespace>>-<<parameters.version>>-<<parameters.module>>-{{ checksum "<<parameters.module>>/go.mod" }}-
-            - go-<<parameters.namespace>>-<<parameters.version>>-<<parameters.module>>-
-
-  go-save-cache:
-    parameters:
-      # The go module to cache for. If the go module does not come with its own go.mod and go.sum,
-      # "." can be used to point to the root go.mod and go.sum
-      module:
-        type: string
-        default: .
-      # Since many builds can run off the same go.mod/go.sum, we'll namespace the caches
-      namespace:
-        type: string
-      version:
-        type: string
-        default: <<pipeline.parameters.go-cache-version>>
-    steps:
-      - save_cache:
-          name: Save go cache for <<parameters.namespace>> (<<parameters.module>>/go.mod)
-          paths:
-            - ~/.cache/go-build
-            - ~/go/pkg/mod
-          key: go-<<parameters.namespace>>-<<parameters.version>>-<<parameters.module>>-{{ checksum "<<parameters.module>>/go.mod" }}-{{ checksum "<<parameters.module>>/go.sum" }}
-
-  pull-artifacts-conditional:
-    description: "Pull artifacts with conditional fallback based on branch and PR labels"
-    steps:
-      - run:
-          name: Pull artifacts
-          command: bash scripts/ops/use-latest-fallback.sh
-          working_directory: packages/contracts-bedrock
-
   # --- Rust environment setup commands ---
-  rust-install-toolchain:
-    description: "Install Rust toolchain via rustup"
-    parameters:
-      channel:
-        description: The Rust channel release to use (stable, nightly, etc.)
-        type: string
-        default: "stable"
-      components:
-        description: Components to install (space or comma separated)
-        type: string
-        default: ""
-      toolchain_version:
-        description: The specific toolchain version for stable channel
-        type: string
-        default: "1.92.0"
-      target:
-        description: A custom target architecture to add to the toolchain
-        type: string
-        default: ""
-    steps:
-      - run:
-          name: Install Rust toolchain (<< parameters.channel >>)
-          command: |
-            rustup default << parameters.toolchain_version >>
-
-            if [ -n "<< parameters.components >>" ]; then
-              rustup component add << parameters.components >>
-            fi
-            if [ -n "<< parameters.target >>" ]; then
-              rustup target add << parameters.target >>
-            fi
-
-  rust-setup-env:
-    description: "Fix rust mise environment variables"
-    steps:
-      - run:
-          name: Fix mise environment variables
-          command: |
-            echo "export CARGO_HOME=${MISE_CARGO_HOME}" >> "$BASH_ENV"
-            echo "export RUSTUP_HOME=${MISE_RUSTUP_HOME}" >> "$BASH_ENV"
-            echo "source ${MISE_CARGO_HOME}/env" >> "$BASH_ENV"
-      - run:
-          name: Configure Rust binary paths (sysgo)
-          command: |
-            ROOT_DIR="$(pwd)"
-            BIN_DIR="$ROOT_DIR/.circleci-cache/rust-binaries"
-            echo "export RUST_BINARY_PATH_KONA_NODE=$ROOT_DIR/kona/target/release/kona-node" >> "$BASH_ENV"
-            echo "export RUST_BINARY_PATH_KONA_SUPERVISOR=$ROOT_DIR/kona/target/release/kona-supervisor" >> "$BASH_ENV"
-            echo "export RUST_BINARY_PATH_OP_RBUILDER=$BIN_DIR/op-rbuilder" >> "$BASH_ENV"
-            echo "export RUST_BINARY_PATH_ROLLUP_BOOST=$BIN_DIR/rollup-boost" >> "$BASH_ENV"
-
-  rust-prepare:
-    parameters:
-      needs_clang:
-        description: "Whether to install clang (needed by bindgen for reth-mdbx-sys)."
-        type: boolean
-        default: true
-    description: "Prepare the Rust environment for the build. Does not copy binaries to/from the cache."
-    steps:
-      - rust-setup-env
-      - when:
-          condition: << parameters.needs_clang >>
-          steps:
-            - run:
-                name: Install clang
-                command: |
-                  export NEEDRESTART_MODE=a
-                  sudo -E apt-get update --yes
-                  sudo -E apt-get install -y --no-install-recommends clang llvm-dev libclang-dev
-
   rust-restore-build-cache:
-    description: "Restore the target directory cache for a Rust workspace"
+    description: "Restore the dependency and toolchain caches for a Rust workspace"
     parameters:
       directory:
         description: "Directory containing the Cargo workspace"
@@ -455,7 +451,7 @@ commands:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: &rust-cache-version "16"
       profile:
         description: "Profile to restore the cache for"
         type: string
@@ -469,19 +465,26 @@ commands:
         type: string
         default: "rust-build"
     steps:
+      # Shared across every Rust job: the downloaded crate set is identical
+      # for a given Cargo.lock regardless of job, profile, or features, so a
+      # single key avoids each job downloading and storing its own copy.
+      # No fallback key on purpose — a Cargo.lock change fully refreshes the
+      # cache rather than layering new crates on top of stale ones, which keeps
+      # the cache from growing unboundedly with old dependency versions.
       - restore_cache:
-          name: Restore << parameters.directory >> target cache
+          name: Restore << parameters.directory >> dependency cache (shared)
           keys:
-            - << parameters.prefix >>-v<< parameters.version >>-{{ checksum "<< parameters.directory >>/Cargo.lock" }}-<< parameters.profile >>-<< parameters.features >>
-            - << parameters.prefix >>-v<< parameters.version >>-{{ checksum "<< parameters.directory >>/Cargo.lock" }}-<< parameters.profile >>
-            - << parameters.prefix >>-v<< parameters.version >>-{{ checksum "<< parameters.directory >>/Cargo.lock" }}
+            - rust-deps-v<< parameters.version >>-{{ checksum "<< parameters.directory >>/Cargo.lock" }}
+      # Toolchain (.rustup + cargo-installed bins) keyed on the toolchain pins,
+      # not Cargo.lock, so a dependency bump no longer discards and re-downloads
+      # the Rust toolchain. Shared across all jobs.
       - restore_cache:
-          name: Restore << parameters.directory >> registry cache (mise)
+          name: Restore Rust toolchain cache (shared)
           keys:
-            - << parameters.prefix >>-registry-v<< parameters.version >>-{{ checksum "<< parameters.directory >>/Cargo.lock" }}
+            - rust-toolchain-v<< parameters.version >>-{{ checksum "mise.toml" }}-{{ checksum "rust/rust-toolchain.toml" }}
 
   rust-save-build-cache:
-    description: "Save the target directory cache for a Rust workspace"
+    description: "Save the dependency and toolchain caches for a Rust workspace"
     parameters:
       directory:
         description: "Directory containing the Cargo workspace"
@@ -489,7 +492,7 @@ commands:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: *rust-cache-version
       profile:
         description: "Profile to save the cache for"
         type: string
@@ -503,19 +506,24 @@ commands:
         type: string
         default: "rust-build"
     steps:
+      # Surface sccache hit/write stats at job end. Harmless no-op when sccache
+      # is absent; confirms the GCS cache is hit rather than silently failing.
+      - run:
+          name: sccache stats
+          command: 'command -v sccache >/dev/null 2>&1 && sccache --show-stats || true'
+          when: always
       - save_cache:
-          key: << parameters.prefix >>-registry-v<< parameters.version >>-{{ checksum "<< parameters.directory >>/Cargo.lock" }}
-          name: Save << parameters.directory >> registry cache (mise)
+          key: rust-deps-v<< parameters.version >>-{{ checksum "<< parameters.directory >>/Cargo.lock" }}
+          name: Save << parameters.directory >> dependency cache (shared)
           paths:
             - /data/mise-data/.cargo/registry
             - /data/mise-data/.cargo/git
+      - save_cache:
+          key: rust-toolchain-v<< parameters.version >>-{{ checksum "mise.toml" }}-{{ checksum "rust/rust-toolchain.toml" }}
+          name: Save Rust toolchain cache (shared)
+          paths:
             - /data/mise-data/.cargo/bin
             - /data/mise-data/.rustup
-      - save_cache:
-          key: << parameters.prefix >>-v<< parameters.version >>-{{ checksum "<< parameters.directory >>/Cargo.lock" }}-<< parameters.profile >>-<< parameters.features >>
-          name: Save << parameters.directory >> target cache
-          paths:
-            - << parameters.directory >>/target/<< parameters.profile >>
 
   rust-prepare-and-restore-cache:
     description: "Prepare the Rust environment and restore the cache"
@@ -530,7 +538,7 @@ commands:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: *rust-cache-version
       profile:
         description: "Profile to restore the cache for"
         type: string
@@ -543,9 +551,14 @@ commands:
         description: "Prefix to add to the cache key"
         type: string
         default: "rust-build"
+      enable_sccache:
+        description: "Whether to set up the sccache GCS compile cache (see rust-prepare)."
+        type: boolean
+        default: true
     steps:
       - rust-prepare:
           needs_clang: << parameters.needs_clang >>
+          enable_sccache: << parameters.enable_sccache >>
       - rust-restore-build-cache:
           version: << parameters.version >>
           directory: << parameters.directory >>
@@ -566,7 +579,7 @@ commands:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: *rust-cache-version
       profile:
         description: "Profile to build the binary with"
         type: string
@@ -602,6 +615,7 @@ commands:
             PWD=$(pwd)
             export CARGO_TARGET_DIR="$PWD/<< parameters.directory >>/target"
             echo "CARGO_TARGET_DIR: $CARGO_TARGET_DIR"
+
             export PROFILE="--profile << parameters.profile >>"
 
             # Debug profile is specified as "debug" in the config/target, but cargo build expects "dev"
@@ -614,7 +628,7 @@ commands:
               export PACKAGE="--package << parameters.package >>"
             fi
 
-            export BINARY="--all-targets"
+            export BINARY=""
             if [ -n "<< parameters.binary >>" ]; then
               export BINARY="--bin << parameters.binary >>"
             fi
@@ -624,7 +638,7 @@ commands:
               export FEATURES="--all-features"
             fi
 
-            cd << parameters.directory >> && cargo build $PROFILE $TARGET $PACKAGE $FEATURES
+            cd << parameters.directory >> && cargo build $PROFILE $TARGET $PACKAGE $FEATURES $BINARY
           no_output_timeout: 30m
       - when:
           condition: << parameters.save_cache >>
@@ -636,12 +650,24 @@ commands:
                 features: << parameters.features >>
 
 jobs:
+  ci-gate:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    parameters:
+      always-succeed:
+        description: Force always succeed (skip API gate; for contracts-feature-tests-short)
+        type: boolean
+        default: false
+    steps:
+      - utils/ci-gate:
+          always-succeed: << parameters.always-succeed >>
+
   # Build a single Rust binary from a workspace. Will cache the binary by default.
   rust-build-binary:
     description: "Build a Rust workspace with target directory caching"
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-rust_base_image>>
+    resource_class: xlarge.gen2
     parameters:
       directory:
         description: "Directory containing the Cargo workspace"
@@ -653,7 +679,7 @@ jobs:
       version:
         description: "Version of the cache"
         type: string
-        default: "15"
+        default: *rust-cache-version
       profile:
         description: "Profile to build the binary with"
         type: string
@@ -674,6 +700,10 @@ jobs:
         description: "Whether to save the cache at the end of the build"
         type: boolean
         default: true
+      persist_to_workspace:
+        description: "Whether to persist the built binaries to the CircleCI workspace"
+        type: boolean
+        default: false
     steps:
       - rust-build:
           directory: << parameters.directory >>
@@ -684,16 +714,34 @@ jobs:
           package: << parameters.package >>
           binary: << parameters.binary >>
           save_cache: << parameters.save_cache >>
+      - when:
+          condition: << parameters.persist_to_workspace >>
+          steps:
+            - persist_to_workspace:
+                root: "."
+                paths:
+                  - "<< parameters.directory >>/target/<< parameters.profile >>/kona-*"
+                  - "<< parameters.directory >>/target/<< parameters.profile >>/op-*"
+                  - "<< parameters.directory >>/target/<< parameters.profile >>/rollup-boost"
 
-  # Build a single Rust binary from a submodule.
-  rust-build-submodule:
+  # Build a single Rust binary from a vendored (non-submodule) directory.
+  rust-build-vendored:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-rust_base_image>>
+    resource_class: xlarge.gen2
     parameters:
       directory:
         description: "Directory containing the Cargo workspace"
         type: string
+      hash_paths:
+        description: >
+          Space-separated git paths whose tree hash keys the binary cache. MUST cover the full
+          dependency closure the binary compiles, not just `directory`: these vendored workspaces
+          path-depend on sibling crates under rust/ (e.g. alloy-op-evm, op-revm, op-reth), so hashing
+          only `directory` reuses a stale binary when a dependency outside it changes. Defaults to
+          `directory`. Keep in sync with the workspace's `path = "../<crate>"` dependencies.
+        type: string
+        default: ""
       binaries:
         description: "Space-separated list of binary names to copy from target/release into the cache"
         type: string
@@ -707,29 +755,36 @@ jobs:
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
+      # Wrap the cargo build with sccache (sets RUSTC_WRAPPER). Fail-open: if the
+      # cache is unavailable the build just runs uncached. Only helps on a binary
+      # cache miss (a hit short-circuits the build below).
+      - rust-sccache-setup
       - run:
-          name: Get << parameters.directory >> submodule HASH
+          name: Get << parameters.directory >> content HASH
           command: |
             mkdir -p .circleci-cache
-            # Verify the path is a git submodule (gitlink). For submodules, ls-tree prints:
-            # 160000 commit <sha> <path>
-            MODE_AND_TYPE="$(git ls-tree HEAD << parameters.directory >> | awk '{print $1 " " $2}')"
-            if [ "$MODE_AND_TYPE" != "160000 commit" ]; then
-              echo "ERROR: << parameters.directory >> is not a submodule path (expected '160000 commit', got '$MODE_AND_TYPE')" >&2
-              git ls-tree HEAD << parameters.directory >> >&2 || true
-              exit 1
-            fi
-
-            git ls-tree HEAD << parameters.directory >> | awk '{print $3}' > .circleci-cache/expected-submod-sha.txt
-            echo "Expected submodule HASH: $(cat .circleci-cache/expected-submod-sha.txt)"
+            HASH_PATHS="<< parameters.hash_paths >>"
+            [ -z "$HASH_PATHS" ] && HASH_PATHS="<< parameters.directory >>"
+            echo "Hashing paths: $HASH_PATHS"
+            # Fail fast on a stale/typo'd path: `git ls-tree` emits nothing (exit 0) for a
+            # non-existent path, which would silently shrink the hash and reintroduce the stale-binary
+            # bug this keying is meant to prevent.
+            for p in $HASH_PATHS; do
+              if ! git cat-file -e "HEAD:$p" 2>/dev/null; then
+                echo "ERROR: hash_paths entry '$p' does not exist at HEAD — fix hash_paths in main.yml" >&2
+                exit 1
+              fi
+            done
+            git ls-tree -r HEAD $HASH_PATHS | sha256sum | awk '{print $1}' > .circleci-cache/expected-submod-sha.txt
+            echo "Content HASH: $(cat .circleci-cache/expected-submod-sha.txt)"
             echo "<< parameters.binaries >>" | tr ' ' '\n' | awk 'NF' | sort -u > .circleci-cache/expected-binaries.txt
             echo "Expected binaries: $(tr '\n' ' ' < .circleci-cache/expected-binaries.txt)"
       - restore_cache:
           name: Restore << parameters.directory >> cache
           keys:
-            - rust-<< parameters.directory >>-v8-{{ checksum ".circleci-cache/expected-submod-sha.txt" }}-{{ checksum ".circleci-cache/expected-binaries.txt" }}
+            - rust-<< parameters.directory >>-v9-{{ checksum ".circleci-cache/expected-submod-sha.txt" }}-{{ checksum ".circleci-cache/expected-binaries.txt" }}
       - run:
-          name: Build << parameters.directory >> submodule (if needed)
+          name: Build << parameters.directory >> (if needed)
           command: |
             ROOT_DIR="$(pwd)"
             BIN_CACHE_DIR="$ROOT_DIR/.circleci-cache/rust-binaries"
@@ -747,12 +802,19 @@ jobs:
             fi
 
             echo "Cache miss - will build"
-            # Only run on cache miss. We intentionally do not cache into the submodule directory so that cache
-            # restore cannot make the submodule path non-empty (which breaks `git submodule update --init`).
-            git submodule update --init --recursive --depth 1 -j 8 --single-branch << parameters.directory >>
 
-            if [ "<< parameters.needs_clang >>" = "true" ]; then
-              sudo apt-get update
+            if [ "<< parameters.needs_clang >>" = "true" ] && ! command -v clang >/dev/null; then
+              for i in 1 2 3; do
+                if sudo apt-get -o Acquire::Retries=5 update; then
+                  break
+                fi
+                if [ "$i" = "3" ]; then
+                  echo "apt-get update failed after 3 attempts" >&2
+                  exit 1
+                fi
+                echo "apt-get update failed (attempt $i), retrying in 10s..." >&2
+                sleep 10
+              done
               sudo apt-get install -y --no-install-recommends clang
             fi
 
@@ -771,7 +833,7 @@ jobs:
             done
           no_output_timeout: 30m
       - save_cache:
-          key: rust-<< parameters.directory >>-v8-{{ checksum ".circleci-cache/expected-submod-sha.txt" }}-{{ checksum ".circleci-cache/expected-binaries.txt" }}
+          key: rust-<< parameters.directory >>-v9-{{ checksum ".circleci-cache/expected-submod-sha.txt" }}-{{ checksum ".circleci-cache/expected-binaries.txt" }}
           name: Save << parameters.directory >> cache
           paths:
             - ".circleci-cache/rust-binaries"
@@ -780,136 +842,18 @@ jobs:
           paths:
             - ".circleci-cache/rust-binaries"
 
-  # Kurtosis-based acceptance tests
-  op-acceptance-tests-kurtosis:
-    parameters:
-      devnet:
-        description: |
-          The name of the pre-defined Kurtosis devnet to run the acceptance tests against
-          (e.g. 'simple', 'interop', 'jovian'). Empty string uses in-process testing (sysgo orchestrator).
-        type: string
-        default: "interop"
-      gate:
-        description: The gate to run the acceptance tests against. Must be defined in op-acceptance-tests/acceptance-tests.yaml.
-        type: string
-        default: "interop"
-      no_output_timeout:
-        description: Timeout for when CircleCI kills the job if there's no output
-        type: string
-        default: 30m
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - setup_remote_docker:
-          docker_layer_caching: true
-      - run:
-          name: Lint/Vet/Build op-acceptance-tests/cmd
-          working_directory: op-acceptance-tests
-          command: |
-            just cmd-check
-      - run:
-          name: Setup Kurtosis
-          command: |
-            echo "Setting up Kurtosis for external devnet testing..."
-            echo "Using Kurtosis from: $(which kurtosis || echo 'not found')"
-            kurtosis version || true
-            echo "Starting Kurtosis engine..."
-            kurtosis engine start || true
-            echo "Cleaning old instances..."
-            kurtosis clean -a || true
-            kurtosis engine status || true
-            echo "Kurtosis setup complete"
-      - run:
-          name: Dump kurtosis logs (pre-run)
-          command: |
-            # Best-effort: show engine status and existing enclaves before the test run
-            kurtosis engine status || true
-            kurtosis enclave ls || true
-      - run:
-          name: Run acceptance tests (devnet=<<parameters.devnet>>, gate=<<parameters.gate>>)
-          working_directory: op-acceptance-tests
-          no_output_timeout: 1h
-          environment:
-            GOFLAGS: "-mod=mod"
-            GO111MODULE: "on"
-            GOGC: "0"
-          command: |
-            LOG_LEVEL=info just acceptance-test "<<parameters.devnet>>" "<<parameters.gate>>"
-      - run:
-          name: Dump kurtosis logs
-          when: on_fail
-          command: |
-            # Dump logs & specs
-            kurtosis dump ./.kurtosis-dump
-
-            # Remove spec.json files
-            rm -rf ./.kurtosis-dump/enclaves/**/*.json
-
-            # Remove all unnecessary logs
-            rm -rf ./.kurtosis-dump/enclaves/*/kurtosis-api--*
-            rm -rf ./.kurtosis-dump/enclaves/*/kurtosis-logs-collector--*
-            rm -rf ./.kurtosis-dump/enclaves/*/task-*
-
-            # Print enclaves and try to show service logs for the most recent devnet
-            kurtosis enclave ls || true
-            # Dump logs for all enclaves to aid debugging
-            for e in $(kurtosis enclave ls --output json 2>/dev/null | jq -r '.[].identifier' 2>/dev/null); do
-              echo "\n==== Kurtosis logs for enclave: $e ===="
-              kurtosis enclave inspect "$e" || true
-              kurtosis service logs "$e" --all-services --follow=false || true
-            done
-      - run:
-          name: Print results (summary)
-          working_directory: op-acceptance-tests
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            cat "$LOG_DIR/summary.log" || true
-      - run:
-          name: Print results (failures)
-          working_directory: op-acceptance-tests
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            cat "$LOG_DIR/failed/*.log" || true
-          when: on_fail
-      - run:
-          name: Print results (all)
-          working_directory: op-acceptance-tests
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            cat "$LOG_DIR/all.log" || true
-      - run:
-          name: Generate JUnit XML test report for CircleCI
-          working_directory: op-acceptance-tests
-          when: always
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            gotestsum --junitfile results/results.xml --raw-command cat $LOG_DIR/raw_go_events.log || true
-      - when:
-          condition: always
-          steps:
-            - store_test_results:
-                path: ./op-acceptance-tests/results
-      - when:
-          condition: always
-          steps:
-            - store_artifacts:
-                path: ./op-acceptance-tests/logs
   initialize:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: large
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: large.gen2
     steps:
       - run:
           command: echo  "Initializing..."
 
   cannon-go-lint-and-test:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: xlarge.gen2
     parameters:
       skip_slow_tests:
         type: boolean
@@ -930,6 +874,8 @@ jobs:
           at: .
       - check-changed:
           patterns: cannon,packages/contracts-bedrock/src/cannon,op-preimage,go.mod
+      - go-restore-cache:
+          namespace: cannon-go-lint-and-test
       - run:
           name: prep Cannon results dir
           command: |
@@ -937,12 +883,12 @@ jobs:
             mkdir -p ./tmp/testlogs
       - run:
           name: build Cannon example binaries
-          command: make elf # only compile ELF binaries with Go, we do not have MIPS GCC for creating the debug-dumps.
+          command: just elf # only compile ELF binaries with Go, we do not have MIPS GCC for creating the debug-dumps.
           working_directory: cannon/testdata
       - run:
           name: Cannon Go lint
           command: |
-            make lint
+            just lint
           working_directory: cannon
       - run:
           name: Cannon Go 64-bit tests
@@ -953,13 +899,11 @@ jobs:
             if [ "$SKIP_SLOW_TESTS" = "false" ]; then
               TIMEOUT="45m"
             fi
-            gotestsum --format=testname --junitfile=../tmp/test-results/cannon-64.xml --jsonfile=../tmp/testlogs/log-64.json \
-            -- -timeout=$TIMEOUT -parallel=$(nproc) -coverpkg=github.com/ethereum-optimism/optimism/cannon/... -coverprofile=coverage-64.out ./...
+            ../ops/scripts/gotestsum-split.sh --format=testname --junitfile=../tmp/test-results/cannon-64.xml --jsonfile=../tmp/testlogs/log-64.json \
+            -- -timeout=$TIMEOUT -parallel=$(nproc) ./...
           working_directory: cannon
-      - codecov/upload:
-          disable_search: true
-          files: ./cannon/coverage-64.out
-          flags: cannon-go-tests-64
+      - go-save-cache:
+          namespace: cannon-go-lint-and-test
       - store_test_results:
           path: ./tmp/test-results
       - store_artifacts:
@@ -973,8 +917,8 @@ jobs:
 
   contracts-bedrock-build:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: 2xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: large.gen2
     parameters:
       build_args:
         description: Forge build arguments
@@ -988,26 +932,28 @@ jobs:
       - utils/checkout-with-mise:
           checkout-method: blobless
           enable-mise-cache: true
-      - install-zstd
       - install-contracts-dependencies
       - run:
           name: Print forge version
           command: forge --version
-      - run:
-          name: Pull artifacts
-          command: bash scripts/ops/pull-artifacts.sh
-          working_directory: packages/contracts-bedrock
       - run:
           name: Build contracts
           command: just forge-build <<parameters.build_args>>
           environment:
             FOUNDRY_PROFILE: <<parameters.profile>>
           working_directory: packages/contracts-bedrock
+      # copy-contract-artifacts runs `go run ... mktar`, which needs the Go
+      # module set. Restore the shared cache (warmed by prep-go-modules) so it
+      # doesn't hit proxy.golang.org.
+      - go-restore-cache:
+          namespace: contracts-bedrock-build
       - run:
           name: "Copy artifacts into deployer"
           command: |
             just copy-contract-artifacts
           working_directory: op-deployer
+      - go-save-cache:
+          namespace: contracts-bedrock-build
       - persist_to_workspace:
           root: "."
           paths:
@@ -1015,12 +961,13 @@ jobs:
             - "packages/contracts-bedrock/artifacts"
             - "packages/contracts-bedrock/forge-artifacts"
             - "op-deployer/pkg/deployer/artifacts/forge-artifacts"
-      - notify-failures-on-develop
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
 
   check-kontrol-build:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: medium.gen2
     steps:
       - utils/checkout-with-mise:
           enable-mise-cache: true
@@ -1039,253 +986,13 @@ jobs:
           name: Build Kontrol summary files
           command: just forge-build ./test/kontrol/proofs
           working_directory: packages/contracts-bedrock
-      - notify-failures-on-develop
-
-  docker-build:
-    environment:
-      DOCKER_BUILDKIT: 1
-    parameters:
-      docker_tags:
-        description: Docker image tags, comma-separated
-        type: string
-      docker_name:
-        description: "Docker buildx bake target"
-        type: string
-        default: ""
-      registry:
-        description: Docker registry
-        type: string
-        default: "us-docker.pkg.dev"
-      repo:
-        description: Docker repo
-        type: string
-        default: "oplabs-tools-artifacts/images"
-      save_image_tag:
-        description: Save docker image with given tag
-        type: string
-        default: ""
-      platforms:
-        description: Platforms to build for, comma-separated
-        type: string
-        default: "linux/amd64"
-      publish:
-        description: Publish the docker image (multi-platform, all tags)
-        type: boolean
-        default: false
-      release:
-        description: Run the release script
-        type: boolean
-        default: false
-      resource_class:
-        description: Docker resource class
-        type: string
-        default: medium
-    machine:
-      image: <<pipeline.parameters.base_image>>
-      resource_class: "<<parameters.resource_class>>"
-      docker_layer_caching: true # we rely on this for faster builds, and actively warm it up for builds with common stages
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - attach_workspace:
-          at: .
-      - run:
-          command: mkdir -p /tmp/docker_images
-      - when:
-          condition:
-            or:
-              - "<<parameters.publish>>"
-              - "<<parameters.release>>"
-          steps:
-            - gcp-cli/install
-      - when:
-          condition:
-            or:
-              - "<<parameters.publish>>"
-              - "<<parameters.release>>"
-          steps:
-            - gcp-oidc-authenticate
-      - run:
-          name: Build
-          command: |
-            # Check to see if DOCKER_HUB_READ_ONLY_TOKEN is set (i.e. we are in repo) before attempting to use secrets.
-            # Building should work without this read only login, but may get rate limited.
-            if [[ -v DOCKER_HUB_READ_ONLY_TOKEN ]]; then
-              echo "$DOCKER_HUB_READ_ONLY_TOKEN" | docker login -u "$DOCKER_HUB_READ_ONLY_USER" --password-stdin
-            fi
-
-            export REGISTRY="<<parameters.registry>>"
-            export REPOSITORY="<<parameters.repo>>"
-            export IMAGE_TAGS="$(echo -ne "<<parameters.docker_tags>>" | sed "s/[^a-zA-Z0-9\n,]/-/g")"
-            export GIT_COMMIT="$(git rev-parse HEAD)"
-            export GIT_DATE="$(git show -s --format='%ct')"
-            export PLATFORMS="<<parameters.platforms>>"
-
-            echo "Checking git tags pointing at $GIT_COMMIT:"
-            tags_at_commit=$(git tag --points-at $GIT_COMMIT)
-            echo "Tags at commit:\n$tags_at_commit"
-
-            filtered_tags=$(echo "$tags_at_commit" | grep "^<<parameters.docker_name>>/" || true)
-            echo "Filtered tags: $filtered_tags"
-
-            if [ -z "$filtered_tags" ]; then
-              export GIT_VERSION="untagged"
-            else
-              sorted_tags=$(echo "$filtered_tags" | sed "s/<<parameters.docker_name>>\///" | sort -V)
-              echo "Sorted tags: $sorted_tags"
-
-              # prefer full release tag over "-rc" release candidate tag if both exist
-              full_release_tag=$(echo "$sorted_tags" | grep -v -- "-rc" || true)
-              if [ -z "$full_release_tag" ]; then
-                export GIT_VERSION=$(echo "$sorted_tags" | tail -n 1)
-              else
-                export GIT_VERSION=$(echo "$full_release_tag" | tail -n 1)
-              fi
-            fi
-
-            echo "Setting GIT_VERSION=$GIT_VERSION"
-
-            # Create, start (bootstrap) and use a *named* docker builder
-            # This allows us to cross-build multi-platform,
-            # and naming allows us to use the DLC (docker-layer-cache)
-            docker buildx create --driver=docker-container --name=buildx-build --bootstrap --use
-
-            DOCKER_OUTPUT_DESTINATION=""
-            if [ "<<parameters.publish>>" == "true" ]; then
-              gcloud auth configure-docker <<parameters.registry>>
-              echo "Building for platforms $PLATFORMS and then publishing to registry"
-              DOCKER_OUTPUT_DESTINATION="--push"
-              if [ "<<parameters.save_image_tag>>" != "" ]; then
-                echo "ERROR: cannot save image to docker when publishing to registry"
-                exit 1
-              fi
-            else
-              if [ "<<parameters.save_image_tag>>" == "" ]; then
-                echo "Running $PLATFORMS build without destination (cache warm-up)"
-                DOCKER_OUTPUT_DESTINATION=""
-              elif [[ $PLATFORMS == *,* ]]; then
-                echo "ERROR: cannot perform multi-arch (platforms: $PLATFORMS) build while also loading the result into regular docker"
-                exit 1
-              else
-                echo "Running single-platform $PLATFORMS build and loading into docker"
-                DOCKER_OUTPUT_DESTINATION="--load"
-              fi
-            fi
-
-            # Let them cook!
-            KONA_VERSION=$(jq -r .version kona/version.json) \
-            docker buildx bake \
-              --progress plain \
-              --builder=buildx-build \
-              -f docker-bake.hcl \
-              $DOCKER_OUTPUT_DESTINATION \
-              <<parameters.docker_name>>
-
-          no_output_timeout: 45m
-      - when:
-          condition: "<<parameters.publish>>"
-          steps:
-            - notify-failures-on-develop
-      - when:
-          condition: "<<parameters.save_image_tag>>"
-          steps:
-            - run:
-                name: Save
-                command: |
-                  IMAGE_NAME="<<parameters.registry>>/<<parameters.repo>>/<<parameters.docker_name>>:<<parameters.save_image_tag>>"
-                  docker save -o /tmp/docker_images/<<parameters.docker_name>>.tar $IMAGE_NAME
-            - persist_to_workspace:
-                root: /tmp/docker_images
-                paths: # only write the one file, to avoid concurrent workspace-file additions
-                  - "<<parameters.docker_name>>.tar"
-      - when:
-          condition: "<<parameters.release>>"
-          steps:
-            - run:
-                name: Tag
-                command: |
-                  ./ops/scripts/ci-docker-tag-op-stack-release.sh <<parameters.registry>>/<<parameters.repo>> $CIRCLE_TAG $CIRCLE_SHA1
-      - when:
-          condition:
-            or:
-              - and:
-                  - "<<parameters.publish>>"
-                  - "<<parameters.release>>"
-              - and:
-                  - "<<parameters.publish>>"
-                  - equal: [develop, << pipeline.git.branch >>]
-          steps:
-            - gcp-oidc-authenticate:
-                service_account_email: GCP_SERVICE_ATTESTOR_ACCOUNT_EMAIL
-            - run:
-                name: Sign
-                command: |
-                  VER=$(yq '.tools.binary_signer' mise.toml)
-                  wget -O - "https://github.com/ethereum-optimism/binary_signer/archive/refs/tags/v${VER}.tar.gz" | tar xz
-                  cd "binary_signer-${VER}/signer"
-
-                  IMAGE_PATH="<<parameters.registry>>/<<parameters.repo>>/<<parameters.docker_name>>:<<pipeline.git.revision>>"
-                  echo $IMAGE_PATH
-                  pip3 install -r requirements.txt
-
-                  python3 ./sign_image.py --command="sign"\
-                      --attestor-project-name="$ATTESTOR_PROJECT_NAME"\
-                      --attestor-name="$ATTESTOR_NAME"\
-                      --image-path="$IMAGE_PATH"\
-                      --signer-logging-level="INFO"\
-                      --attestor-key-id="//cloudkms.googleapis.com/v1/projects/$ATTESTOR_PROJECT_NAME/locations/global/keyRings/$ATTESTOR_NAME-key-ring/cryptoKeys/$ATTESTOR_NAME-key/cryptoKeyVersions/1"
-
-  # Verify newly published images (built on AMD machine) will run on ARM
-  check-cross-platform:
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: arm.medium
-    parameters:
-      registry:
-        description: Docker registry
-        type: string
-        default: "us-docker.pkg.dev"
-      repo:
-        description: Docker repo
-        type: string
-        default: "oplabs-tools-artifacts/images"
-      op_component:
-        description: "Name of op-stack component (e.g. op-node)"
-        type: string
-        default: ""
-      docker_tag:
-        description: "Tag of docker image"
-        type: string
-        default: "<<pipeline.git.revision>>"
-    steps:
-      - setup_remote_docker
-      - run:
-          name: "Verify Image Platform"
-          command: |
-            image_name="<<parameters.registry>>/<<parameters.repo>>/<<parameters.op_component>>:<<parameters.docker_tag>>"
-            echo "Retrieving Docker image manifest: $image_name"
-            MANIFEST=$(docker manifest inspect $image_name)
-
-            echo "Verifying 'linux/arm64' is supported..."
-            SUPPORTED_PLATFORM=$(echo "$MANIFEST" | jq -r '.manifests[] | select(.platform.architecture == "arm64" and .platform.os == "linux")')
-            echo $SUPPORT_PLATFORM
-            if [ -z "$SUPPORTED_PLATFORM" ]; then
-              echo "Platform 'linux/arm64' not supported by this image"
-              exit 1
-            fi
-      - run:
-          name: "Pull and run docker image"
-          command: |
-            image_name="<<parameters.registry>>/<<parameters.repo>>/<<parameters.op_component>>:<<parameters.docker_tag>>"
-            docker pull $image_name || exit 1
-            docker run $image_name <<parameters.op_component>> --version || exit 1
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
 
   contracts-bedrock-tests:
-    circleci_ip_ranges: true
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: 2xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge.gen2
     parameters:
       test_list:
         description: List of test files to run
@@ -1310,7 +1017,6 @@ jobs:
       - utils/checkout-with-mise:
           checkout-method: full
           enable-mise-cache: true
-      - install-zstd
       - run:
           name: Check if test list is empty
           command: |
@@ -1331,7 +1037,6 @@ jobs:
           name: Print forge version
           command: forge --version
           working_directory: packages/contracts-bedrock
-      - pull-artifacts-conditional
       - go-restore-cache:
           namespace: packages/contracts-bedrock/scripts/go-ffi
       - run:
@@ -1359,31 +1064,28 @@ jobs:
           name: Print failed test traces
           command: just test-rerun
           environment:
-            FOUNDRY_PROFILE: ci
+            FOUNDRY_PROFILE: <<parameters.test_profile>>
           working_directory: packages/contracts-bedrock
           when: on_fail
-      - when:
-          condition: always
-          steps:
-            - store_test_results:
-                path: packages/contracts-bedrock/results/results.xml
+      - store_test_results:
+          path: packages/contracts-bedrock/results
+          when: always
       - run:
           name: Lint forge test names
           command: just lint-forge-tests-check-no-build
           working_directory: packages/contracts-bedrock
-      - notify-failures-on-develop
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
 
   contracts-bedrock-heavy-fuzz-nightly:
-    circleci_ip_ranges: true
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: 2xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: full
           enable-mise-cache: true
       - install-contracts-dependencies
-      - install-zstd
       - run:
           name: Print dependencies
           command: just dep-status
@@ -1392,10 +1094,8 @@ jobs:
           name: Print forge version
           command: forge --version
           working_directory: packages/contracts-bedrock
-      - run:
-          name: Pull artifacts
-          command: bash scripts/ops/pull-artifacts.sh
-          working_directory: packages/contracts-bedrock
+      - go-restore-cache:
+          namespace: contracts-bedrock-heavy-fuzz
       - run:
           name: Build go-ffi
           command: just build-go-ffi
@@ -1417,56 +1117,24 @@ jobs:
             FOUNDRY_PROFILE: ciheavy
           working_directory: packages/contracts-bedrock
           when: on_fail
-      - save_cache:
-          name: Save Go build cache
-          key: golang-build-cache-contracts-bedrock-heavy-fuzz-{{ checksum "go.sum" }}
-          paths:
-            - "~/.cache/go-build"
-      - when:
-          condition: always
-          steps:
-            - store_test_results:
-                path: packages/contracts-bedrock/results/results.xml
-      - notify-failures-on-develop
-
-  # AI Contracts Test Maintenance System
-  # Runbook: https://github.com/ethereum-optimism/optimism/blob/develop/ops/ai-eng/contracts-test-maintenance/docs/runbook.md
-  ai-contracts-test:
-    circleci_ip_ranges: true
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: medium
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - run:
-          name: Check Python version
-          command: python3 --version
-      - run:
-          name: Run AI Contracts Test System
-          command: just ai-contracts-test
-          working_directory: ops/ai-eng
-          no_output_timeout: 60m
+      - go-save-cache:
+          namespace: contracts-bedrock-heavy-fuzz
+      # Store raw JUnit XML as artifact for debugging when store_test_results
+      # shows 0 results (see ethereum-optimism/optimism#19577)
       - store_artifacts:
-          path: ops/ai-eng/contracts-test-maintenance/log.json
-          destination: log.json
-      - run:
-          name: Build Slack notification
-          command: just build-slack-notification >> $BASH_ENV
-          working_directory: ops/ai-eng
+          path: packages/contracts-bedrock/results
+          destination: junit-results
           when: always
-      - slack/notify:
-          channel: C050F1GUHDG
-          event: always
-          template: AI_PR_SLACK_TEMPLATE
-      - notify-failures-on-develop
+      - store_test_results:
+          path: packages/contracts-bedrock/results
+          when: always
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
 
   contracts-bedrock-coverage:
-    circleci_ip_ranges: true
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: 2xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge.gen2
     parameters:
       test_timeout:
         description: Timeout for running tests
@@ -1476,6 +1144,10 @@ jobs:
         description: Profile to use for testing
         type: string
         default: ci
+      l1_archive_rpc_url_env_var:
+        description: Mainnet L1 archive RPC URL environment variable
+        type: env_var_name
+        default: OP_CI_MAINNET_L1_ARCHIVE_RPC_URL
       features:
         description: Comma-separated list of features to enable (e.g., "OPTIMISM_PORTAL_INTEROP", "CUSTOM_GAS_TOKEN")
         type: string
@@ -1485,9 +1157,6 @@ jobs:
           checkout-method: full
           enable-mise-cache: true
       - install-contracts-dependencies
-      - install-zstd
-      - attach_workspace:
-          at: .
       - check-changed:
           patterns: contracts-bedrock
       - install-solc-compilers
@@ -1499,25 +1168,25 @@ jobs:
           name: Print forge version
           command: forge --version
           working_directory: packages/contracts-bedrock
-      - pull-artifacts-conditional
+      - apt-install:
+          packages: "lcov"
       - run:
-          name: Install lcov
+          name: Resolve L1 archive RPC URL
           command: |
-            sudo apt-get update
-            sudo apt-get install -y lcov
+            printf 'export ETH_RPC_URL="${%s:?%s must be set}"\n' "<<parameters.l1_archive_rpc_url_env_var>>" "<<parameters.l1_archive_rpc_url_env_var>>" >> "$BASH_ENV"
       - run:
           name: Write pinned block number for cache key
           command: |
             just print-pinned-block-number > ./pinnedBlockNumber.txt
             cat pinnedBlockNumber.txt
-          environment:
-            ETH_RPC_URL: https://ci-mainnet-l1-archive.optimism.io
           working_directory: packages/contracts-bedrock
       - restore_cache:
           name: Restore forked state
           key: forked-state-contracts-bedrock-tests-upgrade-{{ checksum "packages/contracts-bedrock/pinnedBlockNumber.txt" }}
       - setup-features:
           features: <<parameters.features>>
+      - go-restore-cache:
+          namespace: contracts-bedrock-coverage
       - run:
           name: Build go-ffi
           command: just build-go-ffi
@@ -1531,7 +1200,6 @@ jobs:
           command: just coverage-lcov-all
           environment:
             FOUNDRY_PROFILE: <<parameters.test_profile>>
-            ETH_RPC_URL: https://ci-mainnet-l1-archive.optimism.io
           working_directory: packages/contracts-bedrock
           no_output_timeout: <<parameters.test_timeout>>
       - run:
@@ -1539,13 +1207,10 @@ jobs:
           command: just test-rerun | tee failed-test-traces.log
           environment:
             FOUNDRY_PROFILE: <<parameters.test_profile>>
-            ETH_RPC_URL: https://ci-mainnet-l1-archive.optimism.io
           working_directory: packages/contracts-bedrock
           when: on_fail
-      - codecov/upload:
-          disable_search: true
-          files: ./packages/contracts-bedrock/lcov-all.info
-          flags: contracts-bedrock-tests
+      - go-save-cache:
+          namespace: contracts-bedrock-coverage
       - save_cache:
           name: Save forked state
           key: forked-state-contracts-bedrock-tests-upgrade-{{ checksum "packages/contracts-bedrock/pinnedBlockNumber.txt" }}
@@ -1555,10 +1220,10 @@ jobs:
       - store_artifacts:
           path: packages/contracts-bedrock/failed-test-traces.log
           when: on_fail
-      - notify-failures-on-develop
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
 
   contracts-bedrock-tests-upgrade:
-    circleci_ip_ranges: true
     parameters:
       fork_op_chain:
         description: Fork OP Chain
@@ -1568,23 +1233,27 @@ jobs:
         description: Fork Base Chain
         type: string
         default: "mainnet"
-      fork_base_rpc:
-        description: Fork Base RPC
+      fork_base_archive_rpc_env_var:
+        description: Fork base archive RPC URL environment variable
+        type: env_var_name
+        default: OP_CI_MAINNET_L1_ARCHIVE_RPC_URL
+      test_profile:
+        description: Profile to use for testing
         type: string
+        default: ci
       features:
         description: Comma-separated list of features to enable (e.g., "OPTIMISM_PORTAL_INTEROP", "CUSTOM_GAS_TOKEN")
         type: string
         default: ""
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: 2xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           enable-mise-cache: true
+      - go-restore-cache:
+          namespace: contracts-bedrock-tests-upgrade
       - install-contracts-dependencies
-      - install-zstd
-      - attach_workspace:
-          at: .
       - check-changed:
           patterns: contracts-bedrock
       - install-solc-compilers
@@ -1596,7 +1265,10 @@ jobs:
           name: Print forge version
           command: forge --version
           working_directory: packages/contracts-bedrock
-      - pull-artifacts-conditional
+      - run:
+          name: Resolve fork base archive RPC URL
+          command: |
+            printf 'export ETH_RPC_URL="${%s:?%s must be set}"\n' "<<parameters.fork_base_archive_rpc_env_var>>" "<<parameters.fork_base_archive_rpc_env_var>>" >> "$BASH_ENV"
       - run:
           name: Write pinned block number for cache key
           command: |
@@ -1604,7 +1276,6 @@ jobs:
             cat pinnedBlockNumber.txt
           environment:
             FORK_BASE_CHAIN: <<parameters.fork_base_chain>>
-            ETH_RPC_URL: <<parameters.fork_base_rpc>>
           working_directory: packages/contracts-bedrock
       - restore_cache:
           name: Restore forked state
@@ -1620,30 +1291,24 @@ jobs:
             JUNIT_TEST_PATH: results/results.xml
             FOUNDRY_FUZZ_SEED: 42424242
             FOUNDRY_FUZZ_RUNS: 1
-            FOUNDRY_PROFILE: ci
-            ETH_RPC_URL: <<parameters.fork_base_rpc>>
+            FOUNDRY_PROFILE: <<parameters.test_profile>>
             FORK_OP_CHAIN: <<parameters.fork_op_chain>>
             FORK_BASE_CHAIN: <<parameters.fork_base_chain>>
           working_directory: packages/contracts-bedrock
           no_output_timeout: 15m
       - run:
           name: Print failed test traces
-          command: |
-            just test-upgrade-rerun | tee failed-test-traces.log
+          command: just test-upgrade-rerun | tee failed-test-traces.log
           environment:
             FOUNDRY_FUZZ_SEED: 42424242
             FOUNDRY_FUZZ_RUNS: 1
-            FOUNDRY_PROFILE: ci
-            ETH_RPC_URL: <<parameters.fork_base_rpc>>
+            FOUNDRY_PROFILE: <<parameters.test_profile>>
             FORK_OP_CHAIN: <<parameters.fork_op_chain>>
             FORK_BASE_CHAIN: <<parameters.fork_base_chain>>
           working_directory: packages/contracts-bedrock
           when: on_fail
-      - save_cache:
-          name: Save Go build cache
-          key: golang-build-cache-contracts-bedrock-tests-{{ checksum "go.sum" }}
-          paths:
-            - "~/.cache/go-build"
+      - go-save-cache:
+          namespace: contracts-bedrock-tests-upgrade
       - save_cache:
           name: Save forked state
           key: forked-state-contracts-bedrock-tests-upgrade-<<parameters.fork_op_chain>>-<<parameters.fork_base_chain>>-{{ checksum "packages/contracts-bedrock/pinnedBlockNumber.txt" }}
@@ -1653,16 +1318,151 @@ jobs:
       - store_artifacts:
           path: packages/contracts-bedrock/failed-test-traces.log
           when: on_fail
-      - when:
-          condition: always
-          steps:
-            - store_test_results:
-                path: packages/contracts-bedrock/results/results.xml
-      - notify-failures-on-develop
+      # Store raw JUnit XML as artifact for debugging when store_test_results
+      # shows 0 results (see ethereum-optimism/optimism#19577)
+      - store_artifacts:
+          path: packages/contracts-bedrock/results
+          destination: junit-results
+          when: always
+      - store_test_results:
+          path: packages/contracts-bedrock/results
+          when: always
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
+  contracts-bedrock-tests-l2-fork:
+    parameters:
+      fork_op_chain:
+        description: L2 chain to fork for testing
+        type: string
+        default: "op-mainnet"
+      l2_fork_rpc:
+        description: RPC URL for L2 fork. If empty, derived from fork_op_chain.
+        type: string
+        default: ""
+      op_mainnet_l2_rpc_url_env_var:
+        description: OP Mainnet L2 RPC URL environment variable
+        type: env_var_name
+        default: OP_CI_MAINNET_L2_RPC_URL
+      op_sepolia_l2_rpc_url_env_var:
+        description: OP Sepolia L2 RPC URL environment variable
+        type: env_var_name
+        default: OP_CI_SEPOLIA_L2_RPC_URL
+      l2_fork_block_number:
+        description: Block number to fork from
+        type: string
+        default: "latest"
+      test_profile:
+        description: Profile to use for testing
+        type: string
+        default: ci
+      features:
+        description: Comma-separated list of features to enable (e.g., "L2CM")
+        type: string
+        default: "L2CM"
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge.gen2
+    steps:
+      - utils/checkout-with-mise:
+          enable-mise-cache: true
+      - go-restore-cache:
+          namespace: contracts-bedrock-tests-l2-fork
+      - install-contracts-dependencies
+      - check-changed:
+          patterns: contracts-bedrock
+      - install-solc-compilers
+      - run:
+          name: Print dependencies
+          command: just dep-status
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: Print forge version
+          command: forge --version
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: Resolve RPC URL
+          command: |
+            RPC="<<parameters.l2_fork_rpc>>"
+            RPC_ENV_VAR=""
+            if [ -z "$RPC" ]; then
+              case "<<parameters.fork_op_chain>>" in
+                op-mainnet)
+                  RPC_ENV_VAR="<<parameters.op_mainnet_l2_rpc_url_env_var>>"
+                  ;;
+                op-sepolia)
+                  RPC_ENV_VAR="<<parameters.op_sepolia_l2_rpc_url_env_var>>"
+                  ;;
+              esac
+            fi
+            if [ -n "$RPC_ENV_VAR" ]; then
+              printf 'export L2_FORK_RPC_URL="${%s:?%s must be set}"\n' "$RPC_ENV_VAR" "$RPC_ENV_VAR" >> "$BASH_ENV"
+            elif [ -z "$RPC" ]; then
+              RPC=$(jq -r '.["<<parameters.fork_op_chain>>"] // empty' .circleci/l2-rpcs.json)
+              [ -z "$RPC" ] && echo "Unknown chain '<<parameters.fork_op_chain>>' — add it to .circleci/l2-rpcs.json" && exit 1
+              printf 'export L2_FORK_RPC_URL=%q\n' "$RPC" >> "$BASH_ENV"
+            else
+              printf 'export L2_FORK_RPC_URL=%q\n' "$RPC" >> "$BASH_ENV"
+            fi
+      - run:
+          name: Get latest block number if not specified
+          command: |
+            if [ "<<parameters.l2_fork_block_number>>" = "latest" ]; then
+              BLOCK_NUMBER=$(cast block-number --rpc-url "$L2_FORK_RPC_URL")
+              echo "export L2_FORK_BLOCK_NUMBER=$BLOCK_NUMBER" >> $BASH_ENV
+              echo "Using latest block number: $BLOCK_NUMBER"
+              echo "$BLOCK_NUMBER" > ./l2ForkBlockNumber.txt
+            else
+              echo "export L2_FORK_BLOCK_NUMBER=<<parameters.l2_fork_block_number>>" >> $BASH_ENV
+              echo "Using specified block number: <<parameters.l2_fork_block_number>>"
+              echo "<<parameters.l2_fork_block_number>>" > ./l2ForkBlockNumber.txt
+            fi
+          working_directory: packages/contracts-bedrock
+      - restore_cache:
+          name: Restore forked L2 state
+          key: forked-state-l2-<<parameters.fork_op_chain>>-{{ checksum "packages/contracts-bedrock/l2ForkBlockNumber.txt" }}
+      - setup-features:
+          features: <<parameters.features>>
+      - run:
+          name: Check NUT bundle is up-to-date
+          command: just nut-bundle-check-no-build
+          working_directory: packages/contracts-bedrock
+      - run:
+          name: Run L2 fork tests
+          command: |
+            mkdir -p results
+            JUNIT_TEST_PATH=results/results.xml just test-l2-fork-upgrade
+          environment:
+            FOUNDRY_PROFILE: <<parameters.test_profile>>
+          working_directory: packages/contracts-bedrock
+          no_output_timeout: 20m
+      - run:
+          name: Print failed test traces
+          command: |
+            just test-l2-fork-upgrade-rerun | tee failed-test-traces-l2-fork.log
+          environment:
+            FOUNDRY_PROFILE: <<parameters.test_profile>>
+          working_directory: packages/contracts-bedrock
+          when: on_fail
+      - go-save-cache:
+          namespace: contracts-bedrock-tests-l2-fork
+      - save_cache:
+          name: Save forked L2 state
+          key: forked-state-l2-<<parameters.fork_op_chain>>-{{ checksum "packages/contracts-bedrock/l2ForkBlockNumber.txt" }}
+          when: always
+          paths:
+            - "~/.foundry/cache"
+      - store_artifacts:
+          path: packages/contracts-bedrock/failed-test-traces-l2-fork.log
+          when: on_fail
+      - store_test_results:
+          path: packages/contracts-bedrock/results
+          when: always
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
 
   contracts-bedrock-upload:
     machine: true
-    resource_class: large
+    resource_class: large.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -1676,76 +1476,50 @@ jobs:
           command: just update-selectors
           working_directory: packages/contracts-bedrock
 
-  contracts-bedrock-checks:
+  required-contracts-ci:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: small.gen2
+    parameters:
+      always-succeed:
+        description: Force always succeed (skip API gate; for contracts-feature-tests-short)
+        type: boolean
+        default: false
     steps:
-      - utils/checkout-with-mise:
-          enable-mise-cache: true
-      - install-contracts-dependencies
-      - attach_workspace:
-          at: .
-      - check-changed:
-          patterns: contracts-bedrock
-      - get-target-branch
-      - run:
-          name: print forge version
-          command: forge --version
-      - run-contracts-check:
-          command: check-kontrol-summaries-unchanged
-      - run-contracts-check:
-          command: semgrep-test-validity-check
-      - run-contracts-check:
-          command: semgrep
-      - run-contracts-check:
-          command: semver-lock-no-build
-      - run-contracts-check:
-          command: semver-diff-check-no-build
-      - run-contracts-check:
-          command: validate-deploy-configs
-      - run-contracts-check:
-          command: lint
-      - run-contracts-check:
-          command: snapshots-check-no-build
-      - run-contracts-check:
-          command: interfaces-check-no-build
-      - run-contracts-check:
-          command: reinitializer-check-no-build
-      - run-contracts-check:
-          command: size-check
-      - run-contracts-check:
-          command: unused-imports-check-no-build
-      - run-contracts-check:
-          command: strict-pragma-check-no-build
-      - run-contracts-check:
-          command: validate-spacers-no-build
-      - run-contracts-check:
-          command: opcm-upgrade-checks-no-build
+      - utils/ci-gate:
+          always-succeed: << parameters.always-succeed >>
 
   contracts-bedrock-checks-fast:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: 2xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           enable-mise-cache: true
-      - install-zstd
       - install-contracts-dependencies
       - check-changed:
           patterns: contracts-bedrock
+      # `just check-fast` runs `go run ./scripts/check-runner`, so it builds Go.
+      - restore-go-mod-cache
       - run:
           name: Print forge version
           command: forge --version
       - run:
-          name: Pull cached artifacts
-          command: bash scripts/ops/pull-artifacts.sh
-          working_directory: packages/contracts-bedrock
-      - run:
           name: Run checks
           command: just check-fast
           working_directory: packages/contracts-bedrock
-      - notify-failures-on-develop
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
+
+  l2-chains-sync-check:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    steps:
+      - utils/checkout-with-mise:
+          enable-mise-cache: false
+      - run:
+          name: Check l2-rpcs.json and weekly matrix are in sync
+          command: bash .circleci/scripts/check-l2-chains-sync.sh
 
   todo-issues:
     parameters:
@@ -1753,7 +1527,7 @@ jobs:
         type: boolean
         default: true
     machine:
-      image: <<pipeline.parameters.base_image>>
+      image: <<pipeline.parameters.c-base_image>>
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -1779,8 +1553,8 @@ jobs:
         type: boolean
         default: false
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -1796,7 +1570,7 @@ jobs:
           name: Fuzz
           no_output_timeout: 15m
           command: |
-            make fuzz
+            just fuzz
           working_directory: "<<parameters.package_name>>"
       - go-save-cache:
           namespace: fuzz-<<parameters.package_name>>
@@ -1812,27 +1586,60 @@ jobs:
 
   go-lint:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: large
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: large.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
           enable-mise-cache: true
+      - attach_workspace:
+          at: .
+      - go-restore-cache:
+          namespace: go-lint
       - restore_cache:
-          key: golangci-v1-{{ checksum ".golangci.yaml" }}
+          keys:
+            - golangci-v1-{{ checksum ".golangci.yaml" }}
+            # Fall back to the latest golangci cache so a config change reuses
+            # the prior analysis cache instead of a full cold lint.
+            - golangci-v1-
       - run:
           name: run Go linter
           command: |
-            make lint-go
+            just lint-go
+      - go-save-cache:
+          namespace: go-lint
       - save_cache:
+          # Warm the analysis cache even when linting fails, so a branch with
+          # lint errors doesn't repeatedly cold-start golangci-lint.
           key: golangci-v1-{{ checksum ".golangci.yaml" }}
+          when: always
           paths:
             - "/home/circleci/.cache/golangci-lint"
 
+  go-binaries-for-sysgo:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: medium.gen2
+    steps:
+      - utils/checkout-with-mise:
+          checkout-method: blobless
+          enable-mise-cache: true
+      - go-restore-cache:
+          namespace: sysgo-go-binaries
+      - run:
+          name: Build Go binaries for sysgo
+          command: just cannon
+      - go-save-cache:
+          namespace: sysgo-go-binaries
+      - persist_to_workspace:
+          root: .
+          paths:
+            - "cannon/bin"
+
   check-op-geth-version:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: small
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: small.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -1840,7 +1647,91 @@ jobs:
       - run:
           name: check op-geth version
           command: |
-            make check-op-geth-version
+            just check-op-geth-version
+
+  # Builds op-core/superchain/superchain-configs.zip from the pinned commit and
+  # makes it available to downstream Go-build jobs via persist_to_workspace.
+  # The zip itself is gitignored; this job is the only place it gets built in CI.
+  #
+  # Always rebuilds — no cache. The script is fast (depth-1 SR clone + zip
+  # ~10s) and most of the job's wall-clock is mise restore anyway. Always
+  # rebuilding gives strong consistency (every run validates the committed
+  # .sha256 against a freshly-built zip) without cache-key complexity.
+  prep-superchain:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: small.gen2
+    steps:
+      - utils/checkout-with-mise:
+          checkout-method: blobless
+          enable-mise-cache: true
+      - run:
+          name: build superchain bundle
+          command: just sync-superchain
+      - run:
+          # Catches non-deterministic builds and stale .sha256 commits: if the
+          # rebuilt zip differs from what was approved in review, the .sha256
+          # file written by sync-superchain.sh will diverge from the committed
+          # one and this fails. The init.go runtime checks (SHA256 of embedded
+          # zip, COMMIT entry, op-geth cross-commit) run as part of go-tests
+          # downstream — no need to repeat them here.
+          name: verify rebuilt bundle matches committed .sha256
+          command: git diff --exit-code op-core/superchain/superchain-configs.zip.sha256
+      - persist_to_workspace:
+          root: .
+          paths:
+            - op-core/superchain/superchain-configs.zip
+
+  # Downloads the Go module set once and saves the shared module cache so the
+  # many downstream Go jobs restore it instead of each hitting proxy.golang.org.
+  # Downstream jobs require this so the cache is warm within the same pipeline,
+  # including the first run after a go.sum change.
+  prep-go-modules:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: medium.gen2
+    steps:
+      - utils/checkout-with-mise:
+          checkout-method: blobless
+          enable-mise-cache: true
+      - restore-go-mod-cache
+      - run:
+          name: Download Go modules
+          command: go mod download
+      - save-go-mod-cache
+
+  check-nut-locks:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: small.gen2
+    steps:
+      - utils/checkout-with-mise:
+          checkout-method: blobless
+          enable-mise-cache: true
+      - go-restore-cache:
+          namespace: check-nut-locks
+      - run:
+          name: check nut locks
+          command: |
+            go run ./ops/scripts/check-nut-locks
+      - go-save-cache:
+          namespace: check-nut-locks
+
+  nut-provenance-verify:
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge.gen2
+    steps:
+      - utils/checkout-with-mise:
+          enable-mise-cache: true
+      - install-contracts-dependencies
+      - check-changed:
+          patterns: op-core/nuts
+      # The verify script runs `go run ./ops/scripts/nut-provenance-verify`.
+      - restore-go-mod-cache
+      - run:
+          name: verify NUT bundle provenance
+          command: ./ops/scripts/nut-provenance-verify-changed.sh
 
   go-tests:
     parameters:
@@ -1873,9 +1764,8 @@ jobs:
         type: integer
         default: 1
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: 2xlarge
-    circleci_ip_ranges: true
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge.gen2
     parallelism: <<parameters.parallelism>>
     steps:
       - utils/checkout-with-mise:
@@ -1883,10 +1773,15 @@ jobs:
           enable-mise-cache: true
       - attach_workspace:
           at: .
-      - restore_cache:
-          key: go-tests-v2-{{ checksum "go.mod" }}
       - run:
-          name: Run Go tests via Makefile
+          name: Configure op-reth binary path
+          command: |
+            ROOT_DIR="$(pwd)"
+            echo "export RUST_BINARY_PATH_OP_RETH=$ROOT_DIR/rust/target/release/op-reth" >> "$BASH_ENV"
+      - go-restore-cache:
+          namespace: go-tests
+      - run:
+          name: Run Go tests
           no_output_timeout: <<parameters.no_output_timeout>>
           command: |
             <<parameters.environment_overrides>>
@@ -1894,22 +1789,14 @@ jobs:
             # set to less than number CPUs (xlarge Docker is 16 CPU) so there's some buffer for things
             # like Geth
             export PARALLEL=12
-            make <<parameters.rule>>
-      - save_cache:
-          key: go-tests-v2-{{ checksum "go.mod" }}
-          paths:
-            - "~/.cache/go-build"
-            - "~/go"
+            just <<parameters.rule>>
+      - go-save-cache:
+          namespace: go-tests
       - store_test_results:
           path: ./tmp/test-results
       - run:
           name: Compress test logs
-          command: |
-            if [ -n "$CIRCLE_NODE_TOTAL" ] && [ "$CIRCLE_NODE_TOTAL" -gt 1 ]; then
-              tar -czf testlogs-${CIRCLE_NODE_INDEX}-of-${CIRCLE_NODE_TOTAL}.tar.gz -C ./tmp testlogs
-            else
-              tar -czf testlogs.tar.gz -C ./tmp testlogs
-            fi
+          command: tar -czf testlogs.tar.gz -C ./tmp testlogs
           when: always
       - run:
           name: Clean up op-deployer artifacts
@@ -1917,7 +1804,7 @@ jobs:
             rm -rf ~/.op-deployer/*
           when: always
       - store_artifacts:
-          path: testlogs*.tar.gz
+          path: testlogs.tar.gz
           when: always
       - when:
           condition: "<<parameters.notify>>"
@@ -1938,7 +1825,7 @@ jobs:
       resource_class:
         description: Machine resource class
         type: string
-        default: 2xlarge
+        default: 2xlarge.gen2
       no_output_timeout:
         description: Timeout for when CircleCI kills the job if there's no output
         type: string
@@ -1951,7 +1838,8 @@ jobs:
         description: Environment overrides
         type: string
         default: ""
-    machine: true
+    docker:
+      - image: <<pipeline.parameters.c-default_docker_image>>
     resource_class: <<parameters.resource_class>>
     steps:
       - utils/checkout-with-mise:
@@ -1959,27 +1847,20 @@ jobs:
           enable-mise-cache: true
       - attach_workspace:
           at: .
-      - run:
-          name: build op-program-client
-          command: make op-program-client
-          working_directory: op-program
-      - run:
-          name: build op-program-host
-          command: make op-program-host
-          working_directory: op-program
+      - go-restore-cache:
+          namespace: go-tests-with-fault-proof-deps
       - run:
           name: build cannon
-          command: make cannon
+          command: just cannon
       - run:
           name: run tests
           no_output_timeout: <<parameters.no_output_timeout>>
           command: |
             <<parameters.environment_overrides>>
             export TEST_TIMEOUT=<<parameters.test_timeout>>
-            make go-tests-fraud-proofs-ci
-      - codecov/upload:
-          disable_search: true
-          files: ./coverage.out
+            just go-tests-fraud-proofs-ci
+      - go-save-cache:
+          namespace: go-tests-with-fault-proof-deps
       - store_test_results:
           path: ./tmp/test-results
       - run:
@@ -1995,179 +1876,74 @@ jobs:
             - notify-failures-on-develop:
                 mentions: "<<parameters.mentions>>"
 
-  op-acceptance-sync-tests-docker:
-    parameters:
-      gate:
-        description: The gate to run the acceptance tests against. This gate should be defined in op-acceptance-tests/acceptance-tests.yaml.
-        type: string
-        default: ""
-      no_output_timeout:
-        description: Timeout for when CircleCI kills the job if there's no output
-        type: string
-        default: 30m
-      # Optional sync test configuration parameters
-      network_preset:
-        description: Network preset
-        type: string
-        default: ""
-      l2_cl_syncmode:
-        description: L2 CL Sync mode - can be EL Sync or CL Sync
-        type: string
-        default: ""
-    resource_class: xlarge
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    circleci_ip_ranges: true
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      # Restore cached Go modules
-      - restore_cache:
-          keys:
-            - go-mod-v1-{{ checksum "go.sum" }}
-            - go-mod-v1-
-      # Download Go dependencies
-      - run:
-          name: Download Go dependencies
-          working_directory: op-acceptance-tests
-          command: go mod download
-      - run:
-          name: Lint/Vet/Build op-acceptance-tests/cmd
-          working_directory: op-acceptance-tests
-          command: |
-            just cmd-check
-      # Persist schedule name into env var
-      - run:
-          name: Persist schedule name into env var
-          command: |
-            echo 'export CIRCLECI_PIPELINE_SCHEDULE_NAME="<< pipeline.schedule.name >>"' >> $BASH_ENV
-            echo 'export CIRCLECI_PARAMETERS_SYNC_TEST_OP_NODE_DISPATCH="<< pipeline.parameters.sync_test_op_node_dispatch >>"' >> $BASH_ENV
-      # Run the acceptance tests
-      - run:
-          name: Run acceptance tests (gate=<<parameters.gate>>)
-          working_directory: op-acceptance-tests
-          no_output_timeout: 1h
-          environment:
-            GOFLAGS: "-mod=mod"
-            GO111MODULE: "on"
-            GOGC: "0"
-            # Optional sync test configuration environment variables (only set if parameters are provided)
-            NETWORK_PRESET: "<<parameters.network_preset>>"
-            L2_CL_SYNCMODE: "<<parameters.l2_cl_syncmode>>"
-          command: |
-            # Run the tests
-            LOG_LEVEL=debug just acceptance-test "" "<<parameters.gate>>"
-      - run:
-          name: Print results (summary)
-          working_directory: op-acceptance-tests
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            cat "$LOG_DIR/summary.log" || true
-      - run:
-          name: Print results (failures)
-          working_directory: op-acceptance-tests
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            cat "$LOG_DIR/failed/*.log" || true
-          when: on_fail
-      - run:
-          name: Print results (all)
-          working_directory: op-acceptance-tests
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            cat "$LOG_DIR/all.log" || true
-      - run:
-          name: Generate JUnit XML test report for CircleCI
-          working_directory: op-acceptance-tests
-          when: always
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            gotestsum --junitfile results/results.xml --raw-command cat $LOG_DIR/raw_go_events.log || true
-      # Save the module cache for future runs
-      - save_cache:
-          key: go-mod-v1-{{ checksum "go.sum" }}
-          paths:
-            - "/go/pkg/mod"
-      # Store test results and artifacts
-      - when:
-          condition: always
-          steps:
-            - store_test_results:
-                path: ./op-acceptance-tests/results
-      - when:
-          condition: always
-          steps:
-            - store_artifacts:
-                path: ./op-acceptance-tests/logs
-      - notify-failures-on-develop:
-          mentions: "@changwan <@U08L5U8070U>" # @changwan @Anton Evangelatov
-
   op-acceptance-tests:
     parameters:
-      gate:
-        description: The gate to run the acceptance tests against. This gate should be defined in op-acceptance-tests/acceptance-tests.yaml.
+      l2_cl_kind:
+        description: "L2 consensus layer client (op-node or kona-node)"
         type: string
-        default: ""
+        default: "op-node"
+      l2_el_kind:
+        description: "L2 execution layer client (op-geth or op-reth)"
+        type: string
+        default: "op-geth"
       no_output_timeout:
         description: Timeout for when CircleCI kills the job if there's no output
         type: string
         default: 30m
+      parallelism:
+        description: Number of machines to distribute the tests across
+        type: integer
+        default: 1
+      acceptance_test_jobs:
+        description: "Override ACCEPTANCE_TEST_JOBS (go test -p) for this run; empty leaves the justfile default in place"
+        type: string
+        default: ""
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    circleci_ip_ranges: true
-    resource_class: 2xlarge+
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge+.gen2
+    parallelism: <<parameters.parallelism>>
     steps:
+      - run:
+          name: Install eatmydata and disable fsync for all subprocesses
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends eatmydata
+            echo 'export LD_PRELOAD=libeatmydata.so' >> "$BASH_ENV"
       - utils/checkout-with-mise:
           checkout-method: blobless
           enable-mise-cache: true
       - attach_workspace:
           at: .
-      # Build kona-node for the acceptance tests. This automatically gets kona from the cache.
-      - rust-build:
-          directory: kona
-          profile: "release"
       - run:
           name: Configure Rust binary paths (sysgo)
           command: |
             ROOT_DIR="$(pwd)"
             BIN_DIR="$ROOT_DIR/.circleci-cache/rust-binaries"
-            echo "export RUST_BINARY_PATH_KONA_NODE=$ROOT_DIR/kona/target/release/kona-node" >> "$BASH_ENV"
-            echo "export RUST_BINARY_PATH_KONA_SUPERVISOR=$ROOT_DIR/kona/target/release/kona-supervisor" >> "$BASH_ENV"
+
+            echo "export RUST_BINARY_PATH_KONA_NODE=$ROOT_DIR/rust/target/release/kona-node" >> "$BASH_ENV"
+            echo "export RUST_BINARY_PATH_OP_RETH=$ROOT_DIR/rust/target/release/op-reth" >> "$BASH_ENV"
             echo "export RUST_BINARY_PATH_OP_RBUILDER=$BIN_DIR/op-rbuilder" >> "$BASH_ENV"
             echo "export RUST_BINARY_PATH_ROLLUP_BOOST=$BIN_DIR/rollup-boost" >> "$BASH_ENV"
-      # Restore cached Go modules
-      - restore_cache:
-          keys:
-            - go-mod-v1-{{ checksum "go.sum" }}
-            - go-mod-v1-
-      # Download Go dependencies
       - run:
-          name: Download Go dependencies
-          working_directory: op-acceptance-tests
-          command: go mod download
-      - run:
-          name: Lint/Vet/Build op-acceptance-tests/cmd
-          working_directory: op-acceptance-tests
+          name: Configure L2 stack
           command: |
-            just cmd-check
-      # Prepare the test environment
-      - run:
-          name: Prepare test environment (compile tests and cache build results)
-          working_directory: op-acceptance-tests
-          command: go test -v -c -o /dev/null $(go list -f '{{if .TestGoFiles}}{{.ImportPath}}{{end}}' ./tests/...)
+            echo "export DEVSTACK_L2CL_KIND=<<parameters.l2_cl_kind>>" >> "$BASH_ENV"
+            echo "export DEVSTACK_L2EL_KIND=<<parameters.l2_el_kind>>" >> "$BASH_ENV"
+      # Restore cached Go modules (downloaded once by prep-go-modules) plus the
+      # per-job build cache. Modules are already present, so the test run below
+      # does not need a separate `go mod download`.
+      - go-restore-cache:
+          namespace: op-acceptance-tests
       # Run the acceptance tests (if the devnet is running)
       - run:
-          name: Run acceptance tests (gate=<<parameters.gate>>)
+          name: Run acceptance tests
           working_directory: op-acceptance-tests
-          no_output_timeout: 1h
+          no_output_timeout: <<parameters.no_output_timeout>>
           command: |
-            if [[ "<<parameters.gate>>" == "" ]]; then
-              echo "Running in gateless mode - auto-discovering all tests in ./op-acceptance-tests/..."
-            else
-              echo "Running in gate mode (gate=<<parameters.gate>>)"
+            if [ -n "<<parameters.acceptance_test_jobs>>" ]; then
+              export ACCEPTANCE_TEST_JOBS="<<parameters.acceptance_test_jobs>>"
             fi
-            LOG_LEVEL=info just acceptance-test "" "<<parameters.gate>>"
+            LOG_LEVEL=info just acceptance-test
       - run:
           name: Print results (summary)
           working_directory: op-acceptance-tests
@@ -2179,26 +1955,11 @@ jobs:
           working_directory: op-acceptance-tests
           command: |
             LOG_DIR=$(ls -td -- logs/* | head -1)
-            cat "$LOG_DIR/failed/*.log" || true
+            cat "$LOG_DIR"/failed/*.log || true
           when: on_fail
-      - run:
-          name: Print results (all)
-          working_directory: op-acceptance-tests
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            cat "$LOG_DIR/all.log" || true
-      - run:
-          name: Generate JUnit XML test report for CircleCI
-          working_directory: op-acceptance-tests
-          when: always
-          command: |
-            LOG_DIR=$(ls -td -- logs/* | head -1)
-            gotestsum --junitfile results/results.xml --raw-command cat $LOG_DIR/raw_go_events.log || true
       # Save the module cache for future runs
-      - save_cache:
-          key: go-mod-v1-{{ checksum "go.sum" }}
-          paths:
-            - "/go/pkg/mod"
+      - go-save-cache:
+          namespace: op-acceptance-tests
       # Store test results and artifacts
       - when:
           condition: always
@@ -2214,408 +1975,96 @@ jobs:
           condition: on_fail
           steps:
             - notify-failures-on-develop:
-                mentions: "@protocol-devx-pod @changwan"
+                mentions: "@protocol-oncall"
 
-  op-acceptance-tests-flake-shake:
-    parameters:
-      gate:
-        type: string
-        default: "flake-shake"
-    machine:
-      image: ubuntu-2404:current
-    resource_class: xlarge
-    parallelism: << pipeline.parameters.flake-shake-workers >>
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - attach_workspace:
-          at: .
-      - run:
-          name: Configure Rust binary paths (sysgo)
-          command: |
-            ROOT_DIR="$(pwd)"
-            BIN_DIR="$ROOT_DIR/.circleci-cache/rust-binaries"
-            echo "export RUST_BINARY_PATH_KONA_NODE=$BIN_DIR/kona-node" >> "$BASH_ENV"
-            echo "export RUST_BINARY_PATH_KONA_SUPERVISOR=$BIN_DIR/kona-supervisor" >> "$BASH_ENV"
-            echo "export RUST_BINARY_PATH_OP_RBUILDER=$BIN_DIR/op-rbuilder" >> "$BASH_ENV"
-            echo "export RUST_BINARY_PATH_ROLLUP_BOOST=$BIN_DIR/rollup-boost" >> "$BASH_ENV"
-      - restore_cache:
-          keys:
-            - go-mod-v1-{{ checksum "go.sum" }}
-            - go-mod-v1-
-      - run:
-          name: Download Go dependencies
-          working_directory: op-acceptance-tests
-          command: go mod download
-      - run:
-          name: Lint/Vet/Build op-acceptance-tests/cmd
-          working_directory: op-acceptance-tests
-          command: |
-            just cmd-check
-      - run:
-          name: Calculate iterations for worker
-          command: |
-            bash ./op-acceptance-tests/scripts/ci_flake_shake_calc_iterations.sh << pipeline.parameters.flake-shake-iterations >>
-      - run:
-          name: Run flake-shake iterations
-          no_output_timeout: 3h
-          working_directory: op-acceptance-tests
-          command: |
-            OUTPUT_DIR="logs/flake-shake-results-worker-${FLAKE_SHAKE_WORKER_ID}"
-            mkdir -p "$OUTPUT_DIR"
-            op-acceptor \
-              --validators ./acceptance-tests.yaml \
-              --gate << parameters.gate >> \
-              --testdir tests \
-              --flake-shake \
-              --flake-shake-iterations "$FLAKE_SHAKE_ITERATIONS" \
-              --orchestrator sysgo \
-              --logdir "./$OUTPUT_DIR"
-      - persist_to_workspace:
-          root: op-acceptance-tests
-          paths:
-            - logs/flake-shake-results-worker-*/
-      - store_artifacts:
-          path: ./op-acceptance-tests/logs
-          destination: flake-shake-workers
-
-  op-acceptance-tests-flake-shake-report:
-    machine:
-      image: ubuntu-2404:current
-    resource_class: large
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - attach_workspace:
-          at: .
-      - clean-old-acceptor-logs
-      - run:
-          name: Lint/Vet/Build op-acceptance-tests/cmd
-          working_directory: op-acceptance-tests
-          command: |
-            just cmd-check
-      - go-restore-cache:
-          namespace: op-acceptance-tests-flake-shake-aggregator
-      - run:
-          name: Build flake-shake aggregator
-          working_directory: op-acceptance-tests
-          command: |
-            go mod download
-            go build -o ../flake-shake-aggregator ./cmd/flake-shake-aggregator/main.go
-      - go-save-cache:
-          namespace: op-acceptance-tests-flake-shake-aggregator
-      - run:
-          name: Aggregate results
-          command: |
-            mkdir -p final-report
-            ./flake-shake-aggregator \
-              --input-pattern "logs/flake-shake-results-worker-*/testrun-*/flake-shake-report.json" \
-              --output-dir final-report \
-              --verbose
-      - run:
-          name: Generate summary
-          command: |
-            bash ./op-acceptance-tests/scripts/ci_flake_shake_generate_summary.sh final-report/flake-shake-report.json final-report
-      - run:
-          name: Bundle consolidated flake-shake worker logs
-          command: |
-            set -euo pipefail
-            # Create a single tarball with all worker logs, if any exist in the workspace
-            if compgen -G "op-acceptance-tests/logs/flake-shake-results-worker-*" > /dev/null; then
-              tar -czf final-report/flake-shake-workers-logs.tar.gz op-acceptance-tests/logs/flake-shake-results-worker-*
-              echo "Created final-report/flake-shake-workers-logs.tar.gz"
-            else
-              echo "No worker log directories found to bundle"
-            fi
-      - store_artifacts:
-          path: ./final-report
-          destination: flake-shake-report
-
-  op-acceptance-tests-flake-shake-promote:
-    machine:
-      image: ubuntu-2404:current
-    resource_class: large
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - run:
-          name: Lint/Vet/Build op-acceptance-tests/cmd
-          working_directory: op-acceptance-tests
-          command: |
-            just cmd-check
-      - go-restore-cache:
-          namespace: op-acceptance-tests-flake-shake-promoter
-      - run:
-          name: Build flake-shake promoter
-          working_directory: op-acceptance-tests
-          command: |
-            go mod download
-            go build -o ../flake-shake-promoter ./cmd/flake-shake-promoter/main.go
-      - go-save-cache:
-          namespace: op-acceptance-tests-flake-shake-promoter
-      - run:
-          name: Set GH_TOKEN
-          command: |
-            if [ -n "${GITHUB_TOKEN_GOVERNANCE:-}" ]; then
-              echo "export GH_TOKEN=${GITHUB_TOKEN_GOVERNANCE}" >> "$BASH_ENV"
-            fi
-      - run:
-          name: Validate GH_TOKEN is present
-          command: |
-            if [ -z "${GH_TOKEN:-}" ]; then
-              echo "GH_TOKEN is required for PR creation" >&2
-              exit 1
-            fi
-      - run:
-          name: Run flake-shake promoter
-          command: |
-            ./flake-shake-promoter \
-              --org ethereum-optimism \
-              --repo optimism \
-              --branch "<< pipeline.git.branch >>" \
-              --workflow scheduled-flake-shake \
-              --report-job op-acceptance-tests-flake-shake-report \
-              --days 3 \
-              --gate flake-shake \
-              --min-runs 300 \
-              --max-failure-rate 0.0 \
-              --min-age-days 2 \
-              --dry-run=false \
-              --require-clean-24h \
-              --out ./final-promotion \
-              --verbose
-      - store_artifacts:
-          path: ./final-promotion
-          destination: flake-shake-promotion
-      - run:
-          name: Prepare Slack message (promotion candidates)
-          command: |
-            bash ./op-acceptance-tests/scripts/ci_flake_shake_prepare_slack.sh ./final-promotion/promotion-ready.json
-      - run:
-          name: Slack - Sending Notification
-          command: |
-            set -euo pipefail
-            if [ -z "${SLACK_BLOCKS_PAYLOAD:-}" ] || [ "${SLACK_BLOCKS_PAYLOAD}" = "[]" ]; then
-              echo "SLACK_BLOCKS is empty or doesn't exist. Skipping Slack notification."
-              # Halt this job here to avoid invoking the Slack orb step.
-              circleci-agent step halt
-            else
-              printf '%s' "$SLACK_BLOCKS_PAYLOAD" | jq '.' > /tmp/blocks.json
-              jq -c '{blocks: .}' /tmp/blocks.json > /tmp/slack_template.json
-            fi
-            echo 'export SLACK_TEMPLATE=$(cat /tmp/slack_template.json)' >> "$BASH_ENV"
-      - slack/notify:
-          channel: C03N11M0BBN # "notify-ci" channel
-          event: always
-          retries: 1
-          retry_delay: 3
-          template: SLACK_TEMPLATE
-
-  sanitize-op-program:
+  # Aggregator job - allows downstream jobs and required checks to depend on a single memory-all job.
+  memory-all:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: large
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: small.gen2
     steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
       - run:
-          name: Install tools
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y binutils-mips-linux-gnu
-      - run:
-          name: Build cannon
-          command: make cannon
-      - run:
-          name: Build op-program
-          command: make op-program
-      - run:
-          name: Sanitize op-program client
-          command: make sanitize-program GUEST_PROGRAM=../op-program/bin/op-program-client64.elf
-          working_directory: cannon
-
-  cannon-prestate-quick:
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - restore_cache:
-          name: Restore cannon prestate cache
-          key: cannon-prestate-{{ checksum "./cannon/bin/cannon" }}-{{ checksum "op-program/bin/op-program-client.elf" }}
-      - run:
-          name: Build prestates
-          command: make cannon-prestates
-      - save_cache:
-          key: cannon-prestate-{{ checksum "./cannon/bin/cannon" }}-{{ checksum "op-program/bin/op-program-client.elf" }}
-          name: Save Cannon prestate to cache
-          paths:
-            - "op-program/bin/prestate*.bin.gz"
-            - "op-program/bin/meta*.json"
-            - "op-program/bin/prestate-proof*.json"
-      - persist_to_workspace:
-          root: .
-          paths:
-            - "op-program/bin/prestate*"
-            - "op-program/bin/meta*"
-            - "op-program/bin/op-program"
-            - "op-program/bin/op-program-client"
-            - "cannon/bin"
+          name: All memory-all tests passed
+          command: echo "All memory-all acceptance test variants passed"
 
   cannon-prestate:
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - setup_remote_docker
-      - run:
-          name: Build prestates
-          command: make reproducible-prestate
-      - persist_to_workspace:
-          root: .
-          paths:
-            - "op-program/bin/prestate*"
-            - "op-program/bin/meta*"
-
-  cannon-kona-prestate:
     machine:
       docker_layer_caching: true # we rely on this for faster builds, and actively warm it up for builds with common stages
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
           enable-mise-cache: true
-      - restore_cache:
-          name: Restore kona cache
-          key: kona-prestate-{{ checksum "./kona/justfile" }}-{{ checksum "./kona/version.json" }}
       - run:
-          name: Build kona prestates
-          command: just build-prestates
-          working_directory: kona
-      - save_cache:
-          key: kona-prestate-{{ checksum "./kona/justfile" }}-{{ checksum "./kona/version.json" }}
-          name: Save Kona to cache
-          paths:
-            - "kona/prestates/"
+          name: Build prestates
+          command: just reproducible-prestate
+      - run:
+          name: Capture kona prestate debug artifacts
+          command: |
+            mkdir -p /tmp/prestate-debug
+
+            # chainList.json from the checkout (baked into the binary via include_str!)
+            cp rust/kona/crates/protocol/registry/etc/chainList.json /tmp/prestate-debug/chainList.json
+
+            # The kona-client ELF binaries (for offline inspection with strings/objdump)
+            cp rust/kona/prestate-artifacts-cannon/kona-client-elf /tmp/prestate-debug/kona-client-elf-cannon 2>/dev/null || true
+            cp rust/kona/prestate-artifacts-cannon-interop/kona-client-elf /tmp/prestate-debug/kona-client-elf-cannon-interop 2>/dev/null || true
+      - store_artifacts:
+          path: /tmp/prestate-debug
+          destination: prestate-debug
       - persist_to_workspace:
           root: .
           paths:
-            - "kona/prestates/*"
-
+            - "rust/kona/prestate-artifacts-*/"
 
   # Aggregator job - allows downstream jobs to depend on a single job instead of listing all build jobs.
   rust-binaries-for-sysgo:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: small
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: small.gen2
     steps:
       - run:
           name: All Rust binaries ready
           command: echo "All Rust binaries built and persisted to workspace"
 
-
   # ============================================================================
-
-  publish-cannon-prestates:
-    resource_class: medium
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - attach_workspace:
-          at: "."
-      - gcp-cli/install
-      - gcp-oidc-authenticate:
-          gcp_cred_config_file_path: /tmp/gcp_cred_config.json
-          oidc_token_file_path: /tmp/oidc_token.json
-      - run:
-          no_output_timeout: 30m
-          name: Upload cannon prestates
-          command: |
-            # Use the actual hash for tags (hash can be found by reading releases.json)
-            PRESTATE_MT64_HASH=$(jq -r .pre ./op-program/bin/prestate-proof-mt64.json)
-            PRESTATE_MT64NEXT_HASH=$(jq -r .pre ./op-program/bin/prestate-proof-mt64Next.json)
-            PRESTATE_INTEROP_HASH=$(jq -r .pre ./op-program/bin/prestate-proof-interop.json)
-            PRESTATE_INTEROP_NEXT_HASH=$(jq -r .pre ./op-program/bin/prestate-proof-interopNext.json)
-
-            BRANCH_NAME=$(echo "<< pipeline.git.branch >>" | tr '/' '-')
-            echo "Publishing ${PRESTATE_MT64_HASH}, ${PRESTATE_MT64NEXT_HASH}, ${PRESTATE_INTEROP_HASH}, ${PRESTATE_INTEROP_NEXT_HASH} as ${BRANCH_NAME}"
-            if [[ "" != "<< pipeline.git.branch >>" ]]
-            then
-              echo "Publishing commit hash data"
-              INFO_FILE=$(mktemp)
-              # Upload the git commit info for each prestate since this won't be recorded in releases.json
-              (echo "Commit=<< pipeline.git.revision >>" && echo "Prestate: ${PRESTATE_MT64_HASH}") > "${INFO_FILE}"
-              gsutil cp "${INFO_FILE}" "gs://oplabs-network-data/proofs/op-program/cannon/${BRANCH_NAME}-mt64.bin.gz.txt"
-              echo "Published commit hash data successfully" # So we know if any uploads worked
-              (echo "Commit=<< pipeline.git.revision >>" && echo "Prestate: ${PRESTATE_MT64NEXT_HASH}") > "${INFO_FILE}"
-              gsutil cp "${INFO_FILE}" "gs://oplabs-network-data/proofs/op-program/cannon/${BRANCH_NAME}-mt64Next.bin.gz.txt"
-              (echo "Commit=<< pipeline.git.revision >>" && echo "Prestate: ${PRESTATE_INTEROP_HASH}")  > "${INFO_FILE}"
-              gsutil cp "${INFO_FILE}" "gs://oplabs-network-data/proofs/op-program/cannon/${BRANCH_NAME}-interop.bin.gz.txt"
-              (echo "Commit=<< pipeline.git.revision >>" && echo "Prestate: ${PRESTATE_INTEROP_NEXT_HASH}")  > "${INFO_FILE}"
-              gsutil cp "${INFO_FILE}" "gs://oplabs-network-data/proofs/op-program/cannon/${BRANCH_NAME}-interopNext.bin.gz.txt"
-              rm "${INFO_FILE}" # keep things tidy
-              echo "All commit info published"
-
-              # Use the branch name for branches to provide a consistent URL
-              PRESTATE_MT64_HASH="${BRANCH_NAME}-mt64"
-              PRESTATE_MT64NEXT_HASH="${BRANCH_NAME}-mt64Next"
-              PRESTATE_INTEROP_HASH="${BRANCH_NAME}-interop"
-              PRESTATE_INTEROP_NEXT_HASH="${BRANCH_NAME}-interopNext"
-            fi
-            gsutil cp ./op-program/bin/prestate-mt64.bin.gz \
-              "gs://oplabs-network-data/proofs/op-program/cannon/${PRESTATE_MT64_HASH}.bin.gz"
-
-            gsutil cp ./op-program/bin/prestate-mt64Next.bin.gz \
-              "gs://oplabs-network-data/proofs/op-program/cannon/${PRESTATE_MT64NEXT_HASH}.bin.gz"
-
-            gsutil cp ./op-program/bin/prestate-interop.bin.gz \
-              "gs://oplabs-network-data/proofs/op-program/cannon/${PRESTATE_INTEROP_HASH}.bin.gz"
-
-            gsutil cp ./op-program/bin/prestate-interopNext.bin.gz \
-              "gs://oplabs-network-data/proofs/op-program/cannon/${PRESTATE_INTEROP_NEXT_HASH}.bin.gz"
-      - notify-failures-on-develop:
-          mentions: "@proofs-team"
 
   preimage-reproducibility:
     machine: true
-    resource_class: large
+    resource_class: large.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
           enable-mise-cache: true
+      # `just verify-reproducibility` runs `go run ...verify.go` on the host.
+      - restore-go-mod-cache
       - run:
           name: Verify reproducibility
-          command: make -C op-program verify-reproducibility
+          command: just verify-reproducibility
       - store_artifacts:
-          path: ./op-program/temp/logs
+          path: ./ops/prestate-reproducibility/temp/logs
           when: always
       - notify-failures-on-develop:
           mentions: "@proofs-team"
 
   cannon-stf-verify:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
+      - image: <<pipeline.parameters.c-default_docker_image>>
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
           enable-mise-cache: true
       - setup_remote_docker
+      - go-restore-cache:
+          namespace: cannon-stf-verify
       - run:
           name: Build cannon
-          command: make cannon
+          command: just cannon
       - run:
           name: Verify the Cannon STF
-          command: make -C ./cannon cannon-stf-verify
+          command: just cannon-stf-verify
+          working_directory: cannon
+      - go-save-cache:
+          namespace: cannon-stf-verify
       - notify-failures-on-develop:
           mentions: "@proofs-team"
 
@@ -2634,7 +2083,7 @@ jobs:
       SEMGREP_COMMIT: << pipeline.git.revision >>
     docker:
       - image: returntocorp/semgrep
-    resource_class: xlarge
+    resource_class: xlarge.gen2
     steps:
       - checkout # no need to use mise here since the docker image contains the only dependency
       - unless:
@@ -2663,73 +2112,45 @@ jobs:
           no_output_timeout: 20m
       - notify-failures-on-develop
 
-  bedrock-go-tests: # just a helper, that depends on all the actual test jobs
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: medium
-    steps:
-      - run: echo Done
-
-  analyze-op-program-client:
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - setup_remote_docker
-      - run:
-          name: Run Analyzer
-          command: |
-            make run-vm-compat
-          working_directory: op-program
-
-  op-program-compat:
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: large
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - run:
-          name: Verify Compatibility
-          command: |
-            make verify-compat
-          working_directory: op-program
-
   check-generated-mocks-op-node:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: large
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: large.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
           enable-mise-cache: true
       - check-changed:
           patterns: op-node
+      - go-restore-cache:
+          namespace: check-generated-mocks-op-node
       - run:
           name: check-generated-mocks
-          command: make generate-mocks-op-node && git diff --exit-code
+          command: just generate-mocks-op-node && git diff --exit-code
+      - go-save-cache:
+          namespace: check-generated-mocks-op-node
 
   check-generated-mocks-op-service:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: large
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: large.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
           enable-mise-cache: true
       - check-changed:
           patterns: op-service
+      - go-restore-cache:
+          namespace: check-generated-mocks-op-service
       - run:
           name: check-generated-mocks
-          command: make generate-mocks-op-service && git diff --exit-code
+          command: just generate-mocks-op-service && git diff --exit-code
+      - go-save-cache:
+          namespace: check-generated-mocks-op-service
 
   op-deployer-forge-version:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
+      - image: <<pipeline.parameters.c-default_docker_image>>
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -2740,8 +2161,8 @@ jobs:
 
   kontrol-tests:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: xlarge.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -2770,12 +2191,13 @@ jobs:
                 }
               }'
           working_directory: ./packages/contracts-bedrock
-      - notify-failures-on-develop
+      - notify-failures-on-develop:
+          mentions: "@security-oncall"
 
   publish-contract-artifacts:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: 2xlarge
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: 2xlarge.gen2
     steps:
       - gcp-cli/install
       - gcp-oidc-authenticate:
@@ -2786,12 +2208,26 @@ jobs:
       - utils/checkout-with-mise:
           checkout-method: blobless
           enable-mise-cache: true
+      - run:
+          name: Checkout publish ref
+          environment:
+            PUBLISH_CONTRACT_ARTIFACTS_REF: << pipeline.parameters.c-publish_contract_artifacts_ref >>
+          command: |
+            set -euo pipefail
+
+            if [ -z "$PUBLISH_CONTRACT_ARTIFACTS_REF" ]; then
+              echo "Using pipeline checkout $(git rev-parse HEAD)"
+              exit 0
+            fi
+
+            git fetch --no-tags origin "$PUBLISH_CONTRACT_ARTIFACTS_REF"
+            git checkout --detach FETCH_HEAD
+            echo "Checked out publish ref '$PUBLISH_CONTRACT_ARTIFACTS_REF' at $(git rev-parse HEAD)"
+
+            # Respect the tool versions specified by the ref being published.
+            mise install -v -y
       - install-contracts-dependencies
       - install-zstd
-      - run:
-          name: Pull artifacts
-          command: bash scripts/ops/pull-artifacts.sh
-          working_directory: packages/contracts-bedrock
       - run:
           name: Build contracts
           environment:
@@ -2803,7 +2239,6 @@ jobs:
           command: bash scripts/ops/publish-artifacts.sh
           working_directory: packages/contracts-bedrock
 
-
   go-release:
     parameters:
       module:
@@ -2814,8 +2249,8 @@ jobs:
         default: .goreleaser.yaml
         type: string
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: large
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: large.gen2
     steps:
       - setup_remote_docker:
           docker_layer_caching: true
@@ -2826,6 +2261,8 @@ jobs:
       - utils/checkout-with-mise:
           enable-mise-cache: true
       - attach_workspace: { at: "." }
+      # goreleaser compiles the Go release binaries on the host.
+      - restore-go-mod-cache
       - run:
           name: Configure Docker
           command: |
@@ -2837,8 +2274,8 @@ jobs:
 
   diff-fetcher-forge-artifacts:
     docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    resource_class: medium
+      - image: <<pipeline.parameters.c-default_docker_image>>
+    resource_class: medium.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -2888,7 +2325,7 @@ jobs:
     steps:
       - github-cli/install
       - utils/github-event-handler-setup:
-          github_event_base64: << pipeline.parameters.github-event-base64 >>
+          github_event_base64: << pipeline.parameters.c-github-event-base64 >>
           env_prefix: "github_"
       - run:
           name: Close issue if label is added
@@ -2902,34 +2339,9 @@ jobs:
             MESSAGE: << parameters.message >>
             LABEL_NAME: << parameters.label_name >>
 
-  devnet-metrics-collect-authorship:
-    docker:
-      - image: <<pipeline.parameters.default_docker_image>>
-    steps:
-      - utils/checkout-with-mise:
-          checkout-method: blobless
-          enable-mise-cache: true
-      - run:
-          name: Collect devnet metrics for op-acceptance-tests
-          command: |
-            ./devnet-sdk/scripts/metrics-collect-authorship.sh op-acceptance-tests/tests > .metrics--authorship--op-acceptance-tests
-            echo "Wrote file .metrics--authorship--op-acceptance-tests"
-      - gcp-cli/install
-      - gcp-oidc-authenticate:
-          gcp_cred_config_file_path: /tmp/gcp_cred_config.json
-          oidc_token_file_path: /tmp/oidc_token.json
-      - run:
-          name: Store artifact in Bucket
-          command: |
-            CURRENT_DATE=$(date '+%Y-%m-%d')
-            FOLDER_NAME="dt=$CURRENT_DATE"
-
-            # Upload to the date-partitioned folder structure
-            gsutil cp .metrics--authorship--op-acceptance-tests gs://oplabs-tools-data-public-metrics/metrics-authorship/$FOLDER_NAME/metrics-$CIRCLE_SHA1.csv
-
   generate-flaky-report:
     machine: true
-    resource_class: medium
+    resource_class: medium.gen2
     steps:
       - utils/checkout-with-mise:
           checkout-method: blobless
@@ -2958,23 +2370,14 @@ jobs:
 
 workflows:
   main:
-    when:
-      and:
-        - equal: ["", << pipeline.git.tag >>]
-        - or:
-            - equal: ["webhook", << pipeline.trigger_source >>]
-            - and:
-                - equal: [true, <<pipeline.parameters.main_dispatch>>]
-                - equal: ["api", << pipeline.trigger_source >>]
-                - equal: [
-                      << pipeline.parameters.github-event-type >>,
-                      "__not_set__",
-                    ] #this is to prevent triggering this workflow as the default value is always set for main_dispatch
+    when: << pipeline.parameters.c-run_main >>
     jobs:
       - contracts-bedrock-build:
           name: contracts-bedrock-build
           # Build with just core + script contracts.
           build_args: --deny-warnings --skip test
+          requires:
+            - prep-go-modules
           context:
             - circleci-repo-readonly-authenticated-github-token
             - slack
@@ -2984,78 +2387,11 @@ workflows:
           context:
             - circleci-repo-readonly-authenticated-github-token
             - slack
-      - contracts-bedrock-tests:
-          # Heavily fuzz any fuzz tests within added or modified test files.
-          name: contracts-bedrock-tests-heavy-fuzz-modified <<matrix.features>>
-          test_list: git diff origin/develop...HEAD --name-only --diff-filter=AM -- './test/**/*.t.sol' | sed 's|packages/contracts-bedrock/||'
-          test_timeout: 1h
-          test_profile: ciheavy
-          features: <<matrix.features>>
-          matrix:
-            parameters:
-              features: &features_matrix
-                - main
-                - CUSTOM_GAS_TOKEN
-                - OPTIMISM_PORTAL_INTEROP
-                - OPCM_V2
-                - OPCM_V2,CUSTOM_GAS_TOKEN
-                - OPCM_V2,OPTIMISM_PORTAL_INTEROP
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - slack
-      - contracts-bedrock-tests:
-          name: contracts-bedrock-tests <<matrix.features>>
-          test_list: find test -name "*.t.sol"
-          features: <<matrix.features>>
-          matrix:
-            parameters:
-              features: *features_matrix
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - slack
-          check_changed_patterns: contracts-bedrock,op-node
-      - contracts-bedrock-coverage:
-          # Generate coverage reports.
-          name: contracts-bedrock-coverage <<matrix.features>>
-          test_timeout: 1h
-          test_profile: cicoverage
-          features: <<matrix.features>>
-          matrix:
-            parameters:
-              features: *features_matrix
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - slack
-      - contracts-bedrock-tests-upgrade:
-          name: contracts-bedrock-tests-upgrade op-mainnet <<matrix.features>>
-          fork_op_chain: op
-          fork_base_chain: mainnet
-          fork_base_rpc: https://ci-mainnet-l1-archive.optimism.io
-          features: <<matrix.features>>
-          matrix:
-            parameters:
-              features: *features_matrix
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - slack
-      - contracts-bedrock-tests-upgrade:
-          name: contracts-bedrock-tests-upgrade <<matrix.fork_op_chain>>-mainnet
-          fork_op_chain: <<matrix.fork_op_chain>>
-          fork_base_chain: mainnet
-          fork_base_rpc: https://ci-mainnet-l1-archive.optimism.io
-          matrix:
-            parameters:
-              fork_op_chain: ["base", "ink", "unichain"]
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - slack
-      - contracts-bedrock-checks:
-          requires:
-            - contracts-bedrock-build
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - slack
-      - contracts-bedrock-checks-fast:
+      # contracts-bedrock test/coverage/upgrade/l2-fork/checks-fast jobs have moved
+      # to the contracts-feature-tests workflow below, which is gated on
+      # c-contracts_changed. Keeping them here as well was duplicating every
+      # contracts run on PRs that touch non-contract files.
+      - l2-chains-sync-check:
           context:
             - circleci-repo-readonly-authenticated-github-token
       - contracts-bedrock-upload:
@@ -3084,9 +2420,28 @@ workflows:
             - slack
             - circleci-repo-readonly-authenticated-github-token
       - go-lint:
+          requires:
+            - prep-superchain
+            - prep-go-modules
           context:
             - circleci-repo-readonly-authenticated-github-token
       - check-op-geth-version:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - prep-superchain:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - prep-go-modules:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - check-nut-locks:
+          requires:
+            - prep-go-modules
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - nut-provenance-verify:
+          requires:
+            - prep-go-modules
           context:
             - circleci-repo-readonly-authenticated-github-token
       - fuzz-golang:
@@ -3099,6 +2454,8 @@ workflows:
                 - op-node
                 - op-service
                 - op-chain-ops
+          requires:
+            - prep-go-modules
           context:
             - circleci-repo-readonly-authenticated-github-token
       - fuzz-golang:
@@ -3110,6 +2467,7 @@ workflows:
             - circleci-repo-readonly-authenticated-github-token
           requires:
             - contracts-bedrock-build
+            - prep-go-modules
       - fuzz-golang:
           name: op-e2e-fuzz
           package_name: op-e2e
@@ -3119,7 +2477,8 @@ workflows:
             - circleci-repo-readonly-authenticated-github-token
           requires:
             - contracts-bedrock-build
-            - cannon-prestate-quick
+            - cannon-prestate
+            - prep-go-modules
       - go-tests:
           name: go-tests-short
           parallelism: 12
@@ -3127,9 +2486,14 @@ workflows:
           test_timeout: 20m
           requires:
             - contracts-bedrock-build
-            - cannon-prestate-quick
+            - cannon-prestate
+            - go-binaries-for-sysgo
+            - prep-superchain
+            - prep-go-modules
+            - rust-workspace-binaries
           context:
             - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
           filters:
             branches:
               ignore: develop # Run on all branches EXCEPT develop (PR branches only)
@@ -3145,66 +2509,16 @@ workflows:
               only: develop # Only runs on develop branch (post-merge)
           requires:
             - contracts-bedrock-build
-            - cannon-prestate-quick
+            - cannon-prestate
+            - go-binaries-for-sysgo
+            - prep-superchain
+            - prep-go-modules
+            - rust-workspace-binaries
           context:
             - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
             - slack
-      - analyze-op-program-client:
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - op-program-compat:
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - bedrock-go-tests:
-          requires:
-            - go-lint
-            - cannon-go-lint-and-test
-            - check-generated-mocks-op-node
-            - check-generated-mocks-op-service
-            - op-program-compat
-            # Not needed for the devnet but we want to make sure they build successfully
-            - cannon-docker-build
-            - op-dispute-mon-docker-build
-            - op-program-docker-build
-            - op-supervisor-docker-build
-            - op-test-sequencer-docker-build
-            - go-tests-short
-            - sanitize-op-program
-          context:
-            - circleci-repo-readonly-authenticated-github-tokens
-      - docker-build:
-          name: <<matrix.docker_name>>-docker-build
-          docker_tags: <<pipeline.git.revision>>,<<pipeline.git.branch>>
-          save_image_tag: <<pipeline.git.revision>>
-          matrix:
-            parameters:
-              docker_name:
-                - op-node
-                - op-batcher
-                - op-faucet
-                - op-program
-                - op-proposer
-                - op-challenger
-                - op-dispute-mon
-                - op-deployer
-                - op-conductor
-                - da-server
-                - op-supervisor
-                - op-supernode
-                - op-test-sequencer
-                - cannon
-                - op-dripper
-                - op-interop-mon
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-          requires:
-            - contracts-bedrock-build
-      - cannon-prestate-quick:
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - sanitize-op-program:
-          requires:
-            - cannon-prestate-quick
+      - cannon-prestate:
           context:
             - circleci-repo-readonly-authenticated-github-token
       - check-generated-mocks-op-node:
@@ -3231,9 +2545,154 @@ workflows:
           name: shell-check
           # We don't need the `exclude` key as the orb detects the `.shellcheckrc`
           dir: .
-          ignore-dirs: ./packages/contracts-bedrock/lib
+          ignore-dirs: |
+            ./packages/contracts-bedrock/lib
+            ./docs/public-docs
+            ./rust/op-rbuilder
+            ./rust/rollup-boost
           context:
             - circleci-repo-readonly-authenticated-github-token
+      # Acceptance test jobs (formerly in separate acceptance-tests workflow)
+      - rust-build-binary:
+          name: rust-workspace-binaries
+          directory: rust
+          profile: "release"
+          save_cache: true
+          persist_to_workspace: true
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - sccache-gcs-optimism
+      - rust-build-vendored: &rust-build-op-rbuilder
+          name: rust-build-op-rbuilder
+          directory: rust/op-rbuilder
+          # Full vendored-crate closure op-rbuilder compiles (its `path = "../<crate>"` deps and
+          # their shared siblings). Without op-reth/op-revm/alloy-op-evm/etc. here, a change to one
+          # of those reuses a stale op-rbuilder binary in the sysgo acceptance jobs.
+          hash_paths: "rust/op-rbuilder rust/rollup-boost rust/op-reth rust/op-revm rust/op-alloy rust/alloy-op-evm rust/alloy-op-hardforks"
+          binaries: "op-rbuilder"
+          build_command: cargo build --release -p op-rbuilder --bin op-rbuilder
+          needs_clang: true
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - sccache-gcs-optimism
+      - rust-build-vendored: &rust-build-rollup-boost
+          name: rust-build-rollup-boost
+          directory: rust/rollup-boost
+          # rollup-boost path-depends on op-reth/op-alloy (and their siblings transitively); hash the
+          # same shared vendored-crate closure so a sibling change rebuilds it instead of going stale.
+          hash_paths: "rust/op-rbuilder rust/rollup-boost rust/op-reth rust/op-revm rust/op-alloy rust/alloy-op-evm rust/alloy-op-hardforks"
+          binaries: "rollup-boost"
+          build_command: cargo build --release -p rollup-boost --bin rollup-boost
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - sccache-gcs-optimism
+      # Lint runs in `rust-ci.yml` as `op-rbuilder-checks` / `rollup-boost-checks`
+      # via each crate's `make lint`.
+      - rust-binaries-for-sysgo:
+          requires:
+            - rust-workspace-binaries
+            - rust-build-op-rbuilder
+            - rust-build-rollup-boost
+      - go-binaries-for-sysgo:
+          requires:
+            - prep-go-modules
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      # IN-MEMORY (all) - op-node/op-geth
+      - op-acceptance-tests:
+          name: memory-all-opn-op-geth
+          parallelism: 2
+          acceptance_test_jobs: "8"
+          no_output_timeout: 120m
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+            - discord
+          requires:
+            - contracts-bedrock-build
+            - cannon-prestate
+            - rust-binaries-for-sysgo
+            - go-binaries-for-sysgo
+            - prep-go-modules
+      # IN-MEMORY - op-node/op-reth
+      - op-acceptance-tests:
+          name: memory-all-opn-op-reth
+          l2_el_kind: op-reth
+          parallelism: 2
+          acceptance_test_jobs: "8"
+          no_output_timeout: 120m
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+            - discord
+          requires:
+            - contracts-bedrock-build
+            - cannon-prestate
+            - rust-binaries-for-sysgo
+            - go-binaries-for-sysgo
+            - prep-go-modules
+      # IN-MEMORY - kona/op-reth
+      - op-acceptance-tests:
+          name: memory-all-kona-op-reth
+          l2_cl_kind: kona-node
+          l2_el_kind: op-reth
+          parallelism: 2
+          acceptance_test_jobs: "8"
+          no_output_timeout: 120m
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+            - discord
+          requires:
+            - contracts-bedrock-build
+            - cannon-prestate
+            - rust-binaries-for-sysgo
+            - go-binaries-for-sysgo
+            - prep-go-modules
+      # Gate job - single stable job used as GitHub required status check for develop.
+      # Uses terminal requires so it always runs (even when deps fail), giving the
+      # merge queue an immediate failure signal instead of a timeout.
+      # To add a new mandatory check: add it to requires here. No GitHub ruleset changes needed.
+      - ci-gate:
+          requires:
+            - check-kontrol-build: terminal
+            - shell-check: terminal
+            - go-lint: terminal
+            - semgrep-scan-local: terminal
+            - semgrep-test: terminal
+            - go-tests-short: terminal
+            - memory-all-opn-op-geth: terminal
+            - memory-all-opn-op-reth: terminal
+            - memory-all-kona-op-reth: terminal
+            # Go test/lint jobs previously fanned in via the bedrock-go-tests helper.
+            - cannon-go-lint-and-test: terminal
+            - check-generated-mocks-op-node: terminal
+            - check-generated-mocks-op-service: terminal
+            # Misc checks that run on the merge queue.
+            - check-nut-locks: terminal
+            - check-op-geth-version: terminal
+            - op-deployer-forge-version: terminal
+            - l2-chains-sync-check: terminal
+            - nut-provenance-verify: terminal
+            - diff-fetcher-forge-artifacts: terminal
+            # Fuzz jobs.
+            - cannon-fuzz: terminal
+            - op-e2e-fuzz: terminal
+            - fuzz-golang-op-challenger: terminal
+            - fuzz-golang-op-node: terminal
+            - fuzz-golang-op-service: terminal
+            - fuzz-golang-op-chain-ops: terminal
+          context:
+            - circleci-api-token
+          filters:
+            branches:
+              ignore: develop
+      # Generate flaky test report
+      - generate-flaky-report:
+          name: generate-flaky-tests-report
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-api-token
 
   go-release-op-deployer:
     jobs:
@@ -3286,9 +2745,7 @@ workflows:
             - build-contracts-go-release-op-up
 
   release:
-    when:
-      not:
-        equal: [scheduled_pipeline, << pipeline.trigger_source >>]
+    when: << pipeline.parameters.c-run_release >>
     jobs:
       - initialize:
           context:
@@ -3298,120 +2755,9 @@ workflows:
               only: /^(da-server|cannon|ufm-[a-z0-9\-]*|op-[a-z0-9\-]*)\/v.*/
             branches:
               ignore: /.*/
-      - contracts-bedrock-build:
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-          requires:
-            - initialize
-          filters:
-            tags:
-              only: /^op-deployer.*/ # ensure contract artifacts are embedded in op-deployer binary
-            branches:
-              ignore: /.*/
-      # Standard (medium) cross-platform docker images go here
-      - docker-build:
-          matrix:
-            parameters:
-              docker_name:
-                - op-node
-                - op-batcher
-                - op-deployer
-                - op-faucet
-                - op-proposer
-                - op-challenger
-                - op-dispute-mon
-                - op-conductor
-                - da-server
-                - op-ufm
-                - op-supervisor
-                - op-supernode
-                - op-test-sequencer
-                - cannon
-                - op-dripper
-                - op-interop-mon
-          name: <<matrix.docker_name>>-docker-release
-          docker_tags: <<pipeline.git.revision>>
-          platforms: "linux/amd64,linux/arm64"
-          publish: true
-          release: true
-          filters:
-            tags:
-              only: /^<<matrix.docker_name>>\/v.*/
-            branches:
-              ignore: /.*/
-          context:
-            - oplabs-gcr-release
-          requires:
-            - initialize
-            - contracts-bedrock-build
-      # Checks for cross-platform images go here
-      - check-cross-platform:
-          matrix:
-            parameters:
-              op_component:
-                - op-node
-                - op-batcher
-                - op-deployer
-                - op-faucet
-                - op-proposer
-                - op-challenger
-                - op-dispute-mon
-                - op-conductor
-                - da-server
-                - op-ufm
-                - op-supervisor
-                - op-supernode
-                - op-test-sequencer
-                - op-deployer
-                - cannon
-                - op-dripper
-                - op-interop-mon
-          name: <<matrix.op_component>>-cross-platform
-          requires:
-            - op-node-docker-release
-            - op-batcher-docker-release
-            - op-deployer-docker-release
-            - op-faucet-docker-release
-            - op-proposer-docker-release
-            - op-challenger-docker-release
-            - op-dispute-mon-docker-release
-            - op-conductor-docker-release
-            - da-server-docker-release
-            - op-ufm-docker-release
-            - op-supervisor-docker-release
-            - op-supernode-docker-release
-            - op-test-sequencer-docker-release
-            - cannon-docker-release
-            - op-dripper-docker-release
-            - op-interop-mon-docker-release
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - cannon-prestate:
-          filters:
-            tags:
-              only: /^op-program\/v.*/
-            branches:
-              ignore: /.*/
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-          requires:
-            - initialize
-      - publish-cannon-prestates:
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - slack
-            - oplabs-network-optimism-io-bucket
-          requires:
-            - cannon-prestate
-          filters:
-            tags:
-              only: /^op-program\/v.*/
-            branches:
-              ignore: /.*/
 
   scheduled-todo-issues:
-    when:
-      equal: [build_four_hours, <<pipeline.schedule.name>>]
+    when: << pipeline.parameters.c-run_scheduled_todo_issues >>
     jobs:
       - todo-issues:
           name: todo-issue-checks
@@ -3419,77 +2765,74 @@ workflows:
             - slack
             - circleci-repo-readonly-authenticated-github-token
 
-  develop-publish-contract-artifacts:
-    when:
-      or:
-        - and:
-            - equal: ["develop", <<pipeline.git.branch>>]
-            - equal: ["webhook", << pipeline.trigger_source >>]
-        - and:
-            - equal:
-                [
-                  true,
-                  <<pipeline.parameters.publish_contract_artifacts_dispatch>>,
-                ]
-            - equal: ["api", << pipeline.trigger_source >>]
+  publish-contract-artifacts-on-tag:
+    jobs:
+      - publish-contract-artifacts:
+          filters:
+            tags:
+              only: /^op-contracts\/v.*/
+            branches:
+              ignore: /.*/
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+
+  publish-contract-artifacts-auto-or-manual:
+    when: << pipeline.parameters.c-run_publish_contract_artifacts >>
     jobs:
       - publish-contract-artifacts:
           context:
             - circleci-repo-readonly-authenticated-github-token
 
   develop-fault-proofs:
-    when:
-      or:
-        - and:
-            - equal: ["develop", <<pipeline.git.branch>>]
-            - equal: ["webhook", << pipeline.trigger_source >>]
-        - and:
-            - equal: [true, <<pipeline.parameters.fault_proofs_dispatch>>]
-            - equal: ["api", << pipeline.trigger_source >>]
+    when: << pipeline.parameters.c-run_develop_fault_proofs >>
     jobs:
+      - prep-go-modules:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
       - cannon-prestate:
           context:
             - circleci-repo-readonly-authenticated-github-token
       - cannon-stf-verify:
+          requires:
+            - prep-go-modules
           context:
             - slack
             - circleci-repo-readonly-authenticated-github-token
       - contracts-bedrock-build:
           build_args: --deny-warnings --skip test
+          requires:
+            - prep-go-modules
           context:
             - slack
             - circleci-repo-readonly-authenticated-github-token
+      - rust-build-binary:
+          name: rust-workspace-binaries
+          directory: rust
+          profile: "release"
+          save_cache: true
+          persist_to_workspace: true
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - sccache-gcs-optimism
       - go-tests-with-fault-proof-deps:
           name: op-e2e-cannon-tests
           notify: true
           mentions: "@proofs-team"
           no_output_timeout: 90m
           test_timeout: 480m
-          resource_class: xlarge
+          resource_class: 2xlarge.gen2
           context:
             - slack
             - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
           requires:
             - contracts-bedrock-build
             - cannon-prestate
-      - publish-cannon-prestates:
-          context:
-            - slack
-            - oplabs-network-optimism-io-bucket
-            - circleci-repo-readonly-authenticated-github-token
-          requires:
-            - cannon-prestate
-            - op-e2e-cannon-tests
+            - rust-workspace-binaries
+            - prep-go-modules
 
   develop-kontrol-tests:
-    when:
-      or:
-        - and:
-            - equal: ["develop", <<pipeline.git.branch>>]
-            - equal: ["webhook", << pipeline.trigger_source >>]
-        - and:
-            - equal: [true, <<pipeline.parameters.kontrol_dispatch>>]
-            - equal: ["api", << pipeline.trigger_source >>]
+    when: << pipeline.parameters.c-run_develop_kontrol_tests >>
     jobs:
       - kontrol-tests:
           context:
@@ -3498,10 +2841,7 @@ workflows:
             - circleci-repo-readonly-authenticated-github-token
 
   scheduled-cannon-full-tests:
-    when:
-      or:
-        - equal: [build_four_hours, <<pipeline.schedule.name>>]
-        - equal: [true, << pipeline.parameters.cannon_full_test_dispatch >>]
+    when: << pipeline.parameters.c-run_scheduled_cannon_full_tests >>
     jobs:
       - contracts-bedrock-build:
           build_args: --deny-warnings --skip test
@@ -3517,137 +2857,8 @@ workflows:
             - slack
             - circleci-repo-readonly-authenticated-github-token
 
-  scheduled-docker-publish:
-    when:
-      or:
-        - equal: [build_daily, <<pipeline.schedule.name>>]
-        # Trigger on manual triggers if explicitly requested
-        - equal: [true, << pipeline.parameters.docker_publish_dispatch >>]
-    jobs:
-      - contracts-bedrock-build:
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - docker-build:
-          matrix:
-            parameters:
-              docker_name:
-                - op-node
-                - op-batcher
-                - op-deployer
-                - op-faucet
-                - op-program
-                - op-proposer
-                - op-challenger
-                - op-dispute-mon
-                - op-conductor
-                - op-supervisor
-                - op-supernode
-                - op-test-sequencer
-                - cannon
-                - op-dripper
-                - op-interop-mon
-          name: <<matrix.docker_name>>-docker-publish
-          docker_tags: <<pipeline.git.revision>>,<<pipeline.git.branch>>
-          platforms: "linux/amd64,linux/arm64"
-          publish: true
-          context:
-            - oplabs-gcr
-            - slack
-            - circleci-repo-readonly-authenticated-github-token
-          requires:
-            - contracts-bedrock-build
-      - check-cross-platform:
-          matrix:
-            parameters:
-              op_component:
-                - op-node
-                - op-batcher
-                - op-deployer
-                - op-faucet
-                - op-program
-                - op-proposer
-                - op-challenger
-                - op-dispute-mon
-                - op-conductor
-                - op-supervisor
-                - op-supernode
-                - op-test-sequencer
-                - cannon
-                - op-dripper
-                - op-interop-mon
-          name: <<matrix.op_component>>-cross-platform
-          requires:
-            - <<matrix.op_component>>-docker-publish
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-
-  scheduled-flake-shake:
-    when:
-      or:
-        - equal: [build_daily, << pipeline.schedule.name >>]
-        - and:
-            - equal: [true, << pipeline.parameters.flake-shake-dispatch >>]
-            - equal: ["api", << pipeline.trigger_source >>]
-    jobs:
-      - contracts-bedrock-build:
-          build_args: --skip test
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - cannon-prestate-quick:
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - rust-build-binary:
-          name: kona-build-release
-          directory: kona
-          needs_clang: true
-          profile: "release"
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - rust-build-submodule: &rust-build-op-rbuilder
-          name: rust-build-op-rbuilder
-          directory: op-rbuilder
-          binaries: "op-rbuilder"
-          build_command: cargo build --release -p op-rbuilder --bin op-rbuilder
-          needs_clang: true
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - rust-build-submodule: &rust-build-rollup-boost
-          name: rust-build-rollup-boost
-          directory: rollup-boost
-          binaries: "rollup-boost"
-          build_command: cargo build --release -p rollup-boost --bin rollup-boost
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - rust-binaries-for-sysgo:
-          requires:
-            - kona-build-release
-            - rust-build-op-rbuilder
-            - rust-build-rollup-boost
-      - op-acceptance-tests-flake-shake:
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-          requires:
-            - contracts-bedrock-build
-            - cannon-prestate-quick
-            - rust-binaries-for-sysgo
-      - op-acceptance-tests-flake-shake-report:
-          requires:
-            - op-acceptance-tests-flake-shake
-      - op-acceptance-tests-flake-shake-promote:
-          requires:
-            - op-acceptance-tests-flake-shake-report
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - circleci-repo-optimism
-            - circleci-api-token
-            - slack
-
   scheduled-preimage-reproducibility:
-    when:
-      or:
-        - equal: [build_daily, <<pipeline.schedule.name>>]
-        # Trigger on manual triggers if explicitly requested
-        - equal: [true, << pipeline.parameters.reproducibility_dispatch >>]
+    when: << pipeline.parameters.c-run_scheduled_preimage_reproducibility >>
     jobs:
       - preimage-reproducibility:
           context:
@@ -3655,134 +2866,26 @@ workflows:
             - circleci-repo-readonly-authenticated-github-token
 
   scheduled-stale-check:
-    when:
-      or:
-        - equal: [build_daily, <<pipeline.schedule.name>>]
-          # Trigger on manual triggers if explicitly requested
-        - equal: [true, << pipeline.parameters.stale_check_dispatch >>]
+    when: << pipeline.parameters.c-run_scheduled_stale_check >>
     jobs:
       - stale-check:
           context:
             - circleci-repo-optimism
 
-  scheduled-sync-test-op-node:
-    when:
-      or:
-        - equal: [build_daily, <<pipeline.schedule.name>>]
-        # Trigger on manual triggers if explicitly requested
-        - equal: [true, << pipeline.parameters.sync_test_op_node_dispatch >>]
-    jobs:
-      - contracts-bedrock-build: # needed for sysgo tests
-          build_args: --skip test
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - cannon-prestate-quick: # needed for sysgo tests
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - op-acceptance-sync-tests-docker:
-          name: "sync-test-<<matrix.network_preset>>-daily-<<matrix.l2_cl_syncmode>>"
-          gate: sync-test-op-node
-          no_output_timeout: 30m
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - slack
-          requires:
-            - contracts-bedrock-build
-            - cannon-prestate-quick
-          matrix:
-            parameters:
-              network_preset:
-                [
-                  "op-sepolia",
-                  "base-sepolia",
-                  "unichain-sepolia",
-                  "op-mainnet",
-                  "base-mainnet",
-                ]
-              l2_cl_syncmode: ["consensus-layer", "execution-layer"]
-
   scheduled-heavy-fuzz-tests:
-    when:
-      or:
-        - equal: [build_daily, <<pipeline.schedule.name>>]
-        - equal: [true, << pipeline.parameters.heavy_fuzz_dispatch >>]
+    when: << pipeline.parameters.c-run_scheduled_heavy_fuzz_tests >>
     jobs:
+      - prep-go-modules:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
       - contracts-bedrock-heavy-fuzz-nightly:
+          requires:
+            - prep-go-modules
           context:
             - slack
             - circleci-repo-readonly-authenticated-github-token
-
-  # Acceptance tests
-  acceptance-tests:
-    when:
-      or:
-        - equal: ["webhook", << pipeline.trigger_source >>]
-        # Manual dispatch
-        - and:
-            - equal: [true, <<pipeline.parameters.acceptance_tests_dispatch>>]
-            - equal: ["api", << pipeline.trigger_source >>]
-    jobs:
-      - contracts-bedrock-build: # needed for sysgo tests
-          build_args: --skip test
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - cannon-prestate-quick: # needed for sysgo tests
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - cannon-kona-prestate: # needed for sysgo tests (if any package is in-memory)
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - rust-build-binary: &cannon-kona-host
-          name: cannon-kona-host
-          directory: kona
-          profile: "release"
-          binary: "kona-host"
-          save_cache: true
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - rust-build-binary: &kona-build-release
-          name: kona-build-release
-          directory: kona
-          profile: "release"
-          features: "default"
-          save_cache: true
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-      - rust-build-submodule: *rust-build-op-rbuilder
-      - rust-build-submodule: *rust-build-rollup-boost
-      - rust-binaries-for-sysgo:
-          requires:
-            - kona-build-release
-            - rust-build-op-rbuilder
-            - rust-build-rollup-boost
-      # IN-MEMORY (all)
-      - op-acceptance-tests:
-          name: memory-all
-          gate: "" # Empty gate = gateless mode
-          no_output_timeout: 120m # Allow longer runs for memory-all gate
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - slack
-            - discord
-          requires:
-            - contracts-bedrock-build
-            - cannon-prestate-quick
-            - cannon-kona-prestate
-            - cannon-kona-host
-            - rust-binaries-for-sysgo
-      # Generate flaky test report
-      - generate-flaky-report:
-          name: generate-flaky-tests-report
-          context:
-            - circleci-repo-readonly-authenticated-github-token
-            - circleci-api-token
-
   close-issue-workflow:
-    when:
-      and:
-        - equal: [<< pipeline.trigger_source >>, "api"]
-        - equal: [<< pipeline.parameters.github-event-type >>, "pull_request"]
-        - equal: [<< pipeline.parameters.github-event-action >>, "labeled"]
+    when: << pipeline.parameters.c-run_close_issue >>
     jobs:
       - close-issue:
           label_name: "auto-close-trivial-contribution"
@@ -3793,30 +2896,286 @@ workflows:
           context:
             - circleci-repo-optimism
 
-  devnet-metrics-collect:
-    when:
-      or:
-        - equal: [<< pipeline.trigger_source >>, "webhook"]
-        - and:
-            - equal: [true, << pipeline.parameters.devnet-metrics-collect >>]
-            - equal: [<< pipeline.trigger_source >>, "api"]
+  l2-fork-test-workflow:
+    when: << pipeline.parameters.c-run_l2_fork_test >>
     jobs:
-      - devnet-metrics-collect-authorship:
+      - prep-go-modules:
           context:
             - circleci-repo-readonly-authenticated-github-token
-            - oplabs-tools-data-public-metrics-bucket
-
-  ai-contracts-test-workflow:
-    when:
-      or:
-        - equal: [build_mon_thu, <<pipeline.schedule.name>>]
-        - equal: [true, << pipeline.parameters.ai_contracts_test_dispatch >>]
-    jobs:
-      - ai-contracts-test:
+      - contracts-bedrock-tests-l2-fork:
+          name: contracts-bedrock-tests-l2-fork-dispatch op-mainnet
+          fork_op_chain: op-mainnet
+          l2_fork_block_number: latest
+          test_profile: ci
+          requires:
+            - prep-go-modules
           context:
             - circleci-repo-readonly-authenticated-github-token
-            - circleci-api-token
-            - devin-api
+            - circleci-repo-rpc-secrets
             - slack
 
+  scheduled-weekly-tests:
+    when: << pipeline.parameters.c-run_scheduled_weekly_tests >>
+    jobs:
+      - prep-go-modules:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - contracts-bedrock-tests-l2-fork:
+          requires:
+            - prep-go-modules
+          matrix:
+            parameters:
+              fork_op_chain:
+                - op-mainnet
+                - zora
+                - ink
+                - mode
+                - metal
+                - arena-z
+                - swell
+                - unichain
+                - soneium
+                - world-chain
+                - base
+                - xlayer
+          test_profile: ci
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+
+  contracts-feature-tests:
+    when: << pipeline.parameters.c-run_contracts_feature_tests >>
+    jobs:
+      - prep-go-modules:
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+      - contracts-bedrock-tests:
+          # Heavily fuzz any fuzz tests within added or modified test files.
+          name: contracts-bedrock-tests-heavy-fuzz-modified <<matrix.features>>
+          requires:
+            - prep-go-modules
+          test_list: git diff origin/develop...HEAD --name-only --diff-filter=AM -- './test/**/*.t.sol' | sed 's|packages/contracts-bedrock/||'
+          test_timeout: 1h
+          test_profile: ciheavy
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: &features_matrix
+                - main
+                - CUSTOM_GAS_TOKEN
+                - OPTIMISM_PORTAL_INTEROP
+                - ZK_DISPUTE_GAME
+                - SUPER_ROOT_GAMES_MIGRATION
+                 # TODO(#20084): Remove these commented out jobs when removing the L2CM and CANNON_KONA feature toggles.
+                #   L2CM and CANNON_KONA are now enabled by default, so we do not need to
+                #   explicitly enable them and run these additional jobs. However they are kept here for now so that they
+                #   can easily be reactivated.
+                # - CANNON_KONA
+                # - L2CM
+                # - L2CM,CUSTOM_GAS_TOKEN
+                # - L2CM,OPTIMISM_PORTAL_INTEROP
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+      # On PRs, run tests with lite profile for better build times.
+      - contracts-bedrock-tests:
+          name: contracts-bedrock-tests <<matrix.features>>
+          requires:
+            - prep-go-modules
+          test_list: find test -name "*.t.sol"
+          test_profile: liteci
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+          filters:
+            branches:
+              ignore: develop
+      # On develop, run tests with ci profile to mirror production.
+      - contracts-bedrock-tests:
+          name: contracts-bedrock-tests-develop <<matrix.features>>
+          requires:
+            - prep-go-modules
+          test_list: find test -name "*.t.sol"
+          test_profile: ci
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+          filters:
+            branches:
+              only: develop
+      - contracts-bedrock-coverage:
+          # Generate coverage reports.
+          name: contracts-bedrock-coverage <<matrix.features>>
+          requires:
+            - prep-go-modules
+          test_timeout: 1h
+          test_profile: cicoverage
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+      # On PRs, run upgrade tests with lite profile for better build times.
+      - contracts-bedrock-tests-upgrade:
+          name: contracts-bedrock-tests-upgrade op-mainnet <<matrix.features>>
+          requires:
+            - prep-go-modules
+          fork_op_chain: op
+          fork_base_chain: mainnet
+          test_profile: liteci
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+          filters:
+            branches:
+              ignore: develop
+      # On develop, run upgrade tests with ci profile to mirror production.
+      - contracts-bedrock-tests-upgrade:
+          name: contracts-bedrock-tests-upgrade-develop op-mainnet <<matrix.features>>
+          requires:
+            - prep-go-modules
+          fork_op_chain: op
+          fork_base_chain: mainnet
+          test_profile: ci
+          features: <<matrix.features>>
+          matrix:
+            parameters:
+              features: *features_matrix
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+          filters:
+            branches:
+              only: develop
+      # On PRs, run chain-specific upgrade tests with lite profile for better build times.
+      - contracts-bedrock-tests-upgrade:
+          name: contracts-bedrock-tests-upgrade <<matrix.fork_op_chain>>-mainnet
+          requires:
+            - prep-go-modules
+          fork_op_chain: <<matrix.fork_op_chain>>
+          fork_base_chain: mainnet
+          test_profile: liteci
+          matrix:
+            parameters:
+              fork_op_chain: ["op", "ink", "unichain"]
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+          filters:
+            branches:
+              ignore: develop
+      # On develop, run chain-specific upgrade tests with ci profile to mirror production.
+      - contracts-bedrock-tests-upgrade:
+          name: contracts-bedrock-tests-upgrade-develop <<matrix.fork_op_chain>>-mainnet
+          requires:
+            - prep-go-modules
+          fork_op_chain: <<matrix.fork_op_chain>>
+          fork_base_chain: mainnet
+          test_profile: ci
+          matrix:
+            parameters:
+              fork_op_chain: ["op", "ink", "unichain"]
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+          filters:
+            branches:
+              only: develop
+      # Always run L2 fork tests with ci profile
+      - contracts-bedrock-tests-l2-fork:
+          name: contracts-bedrock-tests-l2-fork op-mainnet
+          requires:
+            - prep-go-modules
+          fork_op_chain: op-mainnet
+          l2_fork_block_number: latest
+          test_profile: ci
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - circleci-repo-rpc-secrets
+            - slack
+      - contracts-bedrock-checks-fast:
+          name: contracts-bedrock-checks-fast-feature-tests
+          requires:
+            - prep-go-modules
+          context:
+            - circleci-repo-readonly-authenticated-github-token
+            - slack
+      # -----------------------------------------------------------------------
+      # required-contracts-ci: GitHub required status for this workflow. Terminal requires
+      # keep this job scheduled even when upstream jobs fail; ci-gate then checks they passed.
+      # -----------------------------------------------------------------------
+      - required-contracts-ci:
+          requires:
+            - contracts-bedrock-tests main: terminal
+            - contracts-bedrock-tests CUSTOM_GAS_TOKEN: terminal
+            - contracts-bedrock-tests OPTIMISM_PORTAL_INTEROP: terminal
+            - contracts-bedrock-tests ZK_DISPUTE_GAME: terminal
+            - contracts-bedrock-tests SUPER_ROOT_GAMES_MIGRATION: terminal
+            - contracts-bedrock-tests-heavy-fuzz-modified main: terminal
+            - contracts-bedrock-tests-heavy-fuzz-modified CUSTOM_GAS_TOKEN: terminal
+            - contracts-bedrock-tests-heavy-fuzz-modified OPTIMISM_PORTAL_INTEROP: terminal
+            - contracts-bedrock-tests-heavy-fuzz-modified ZK_DISPUTE_GAME: terminal
+            - contracts-bedrock-tests-heavy-fuzz-modified SUPER_ROOT_GAMES_MIGRATION: terminal
+            - contracts-bedrock-coverage main: terminal
+            - contracts-bedrock-coverage CUSTOM_GAS_TOKEN: terminal
+            - contracts-bedrock-coverage OPTIMISM_PORTAL_INTEROP: terminal
+            - contracts-bedrock-coverage ZK_DISPUTE_GAME: terminal
+            - contracts-bedrock-coverage SUPER_ROOT_GAMES_MIGRATION: terminal
+            - contracts-bedrock-tests-upgrade op-mainnet main: terminal
+            - contracts-bedrock-tests-upgrade op-mainnet CUSTOM_GAS_TOKEN: terminal
+            - contracts-bedrock-tests-upgrade op-mainnet OPTIMISM_PORTAL_INTEROP: terminal
+            - contracts-bedrock-tests-upgrade op-mainnet ZK_DISPUTE_GAME: terminal
+            - contracts-bedrock-tests-upgrade op-mainnet SUPER_ROOT_GAMES_MIGRATION: terminal
+            - contracts-bedrock-tests-upgrade op-mainnet: terminal
+            - contracts-bedrock-tests-upgrade ink-mainnet: terminal
+            - contracts-bedrock-tests-upgrade unichain-mainnet: terminal
+            - contracts-bedrock-tests-l2-fork op-mainnet: terminal
+            - contracts-bedrock-checks-fast-feature-tests: terminal
+          context:
+            - circleci-api-token
+
   # ============================================================================
+  # Required contracts CI gate (skip) — runs when no contract changes
+  # Produces the required-contracts-ci status so the merge queue doesn't hang.
+  # ============================================================================
+  contracts-feature-tests-short:
+    when: << pipeline.parameters.c-run_contracts_feature_tests_short >>
+    jobs:
+      - required-contracts-ci:
+          always-succeed: true
+          context:
+            - circleci-api-token
+
+  # ============================================================================
+  # ci-gate (skip) — runs only on the docs-only fast path.
+  # Produces the ci-gate required status check with always-succeed so docs-only
+  # PRs (which skip the full `main` workflow) aren't blocked by a missing check.
+  # The real ci-gate still runs in `main` for every other path.
+  # ============================================================================
+  ci-gate-skip:
+    when: << pipeline.parameters.c-run_ci_gate_skip >>
+    jobs:
+      - ci-gate:
+          always-succeed: true
+          context:
+            - circleci-api-token

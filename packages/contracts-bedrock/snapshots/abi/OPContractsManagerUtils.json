@@ -232,22 +232,12 @@
           },
           {
             "internalType": "address",
-            "name": "protocolVersionsImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
             "name": "l1ERC721BridgeImpl",
             "type": "address"
           },
           {
             "internalType": "address",
             "name": "optimismPortalImpl",
-            "type": "address"
-          },
-          {
-            "internalType": "address",
-            "name": "optimismPortalInteropImpl",
             "type": "address"
           },
           {
@@ -313,6 +303,11 @@
           {
             "internalType": "address",
             "name": "superPermissionedDisputeGameImpl",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "zkDisputeGameImpl",
             "type": "address"
           },
           {
@@ -683,6 +678,22 @@
       }
     ],
     "name": "OPContractsManagerUtils_DowngradeNotAllowed",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_contract",
+        "type": "address"
+      }
+    ],
+    "name": "OPContractsManagerUtils_ExtraTagInProd",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OPContractsManagerUtils_OZv5InitializableUnsupported",
     "type": "error"
   },
   {

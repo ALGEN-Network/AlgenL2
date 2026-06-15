@@ -17,9 +17,8 @@ import (
 
 // TestInteropMon is testing that the op-interop-mon metrics are correctly collected
 func TestInteropMon(gt *testing.T) {
-	gt.Skip("Skipping Interop Acceptance Test")
-	t := devtest.SerialT(gt)
-	sys := presets.NewSimpleInterop(t)
+	t := devtest.ParallelT(gt)
+	sys := presets.NewTwoL2SupernodeInterop(t, 0)
 
 	clients := map[eth.ChainID]*sources.EthClient{
 		sys.L2ELA.Escape().ChainID(): sys.L2ELA.Escape().EthClient().(*sources.EthClient),
@@ -35,7 +34,7 @@ func TestInteropMon(gt *testing.T) {
 		MetricsConfig: opmetrics.CLIConfig{
 			Enabled: true,
 		},
-	}, clients, []monitor.FailsafeClient{}, t.Logger())
+	}, clients, t.Logger())
 	t.Require().NoError(err)
 	require.NoError(im.Start(t.Ctx()))
 
@@ -46,10 +45,10 @@ func TestInteropMon(gt *testing.T) {
 
 	// send initiating message on chain A
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	initTx, _ := alice.SendInitMessage(interop.RandomInitTrigger(rng, eventLoggerAddress, rng.Intn(3), rng.Intn(10)))
+	initMsg := alice.SendInitMessage(interop.RandomInitTrigger(rng, eventLoggerAddress, rng.Intn(3), rng.Intn(10)))
 
 	// send executing message on chain B
-	_, _ = bob.SendExecMessage(initTx, 0)
+	_ = bob.SendExecMessage(initMsg)
 
 	// Ensure the metrics are generated
 	require.EventuallyWithT(func(t *assert.CollectT) {

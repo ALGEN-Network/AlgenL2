@@ -107,7 +107,32 @@
   },
   {
     "inputs": [],
+    "name": "OPContractsManagerMigrator_ChainIdsNotAscending",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OPContractsManagerMigrator_CustomGasTokenNotSupported",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OPContractsManagerMigrator_DuplicateL2ChainId",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OPContractsManagerMigrator_InteropNotEnabled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OPContractsManagerMigrator_InvalidStartingRespectedGameType",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OPContractsManagerMigrator_NoChains",
     "type": "error"
   },
   {
@@ -118,6 +143,16 @@
   {
     "inputs": [],
     "name": "OPContractsManagerMigrator_SuperchainConfigMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OPContractsManagerMigrator_SystemPaused",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OPContractsManagerMigrator_ZeroL2ChainId",
     "type": "error"
   }
 ]

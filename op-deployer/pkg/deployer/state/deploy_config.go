@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
@@ -30,7 +31,6 @@ func CombineDeployConfig(intent *Intent, chainIntent *ChainIntent, state *State,
 			L1ERC721BridgeProxy:         chainState.L1Erc721BridgeProxy,
 			SystemConfigProxy:           chainState.SystemConfigProxy,
 			OptimismPortalProxy:         chainState.OptimismPortalProxy,
-			ProtocolVersionsProxy:       state.SuperchainDeployment.ProtocolVersionsProxy,
 		},
 		L2InitializationConfig: genesis.L2InitializationConfig{
 			DevDeployConfig: genesis.DevDeployConfig{
@@ -71,11 +71,6 @@ func CombineDeployConfig(intent *Intent, chainIntent *ChainIntent, state *State,
 				EIP1559DenominatorCanyon: 250,
 				EIP1559Elasticity:        chainIntent.Eip1559Elasticity,
 			},
-			RevenueShareDeployConfig: genesis.RevenueShareDeployConfig{
-				UseRevenueShare:    chainIntent.UseRevenueShare,
-				ChainFeesRecipient: chainIntent.ChainFeesRecipient,
-			},
-
 			GasTokenDeployConfig: genesis.GasTokenDeployConfig{
 				UseCustomGasToken:          chainIntent.IsCustomGasTokenEnabled(),
 				GasPayingTokenName:         chainIntent.CustomGasToken.Name,
@@ -91,7 +86,7 @@ func CombineDeployConfig(intent *Intent, chainIntent *ChainIntent, state *State,
 			UpgradeScheduleDeployConfig: *upgradeSchedule,
 			L2CoreDeployConfig: genesis.L2CoreDeployConfig{
 				L1ChainID:                 intent.L1ChainID,
-				L2ChainID:                 chainState.ID.Big().Uint64(),
+				L2ChainID:                 bigs.Uint64Strict(chainState.ID.Big()),
 				L2BlockTime:               2,
 				FinalizationPeriodSeconds: 12,
 				MaxSequencerDrift:         600,

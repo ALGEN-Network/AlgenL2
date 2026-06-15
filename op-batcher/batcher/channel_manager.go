@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-batcher/metrics"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/queue"
 	"github.com/ethereum/go-ethereum/common"
@@ -129,7 +130,7 @@ func (s *channelManager) TxConfirmed(_id txID, inclusionBlock eth.BlockID) {
 // Panics if the block is not in state.
 func (s *channelManager) rewindToBlock(block eth.BlockID) {
 	initialCursor := s.blockCursor
-	idx := block.Number - s.blocks[0].Number().Uint64()
+	idx := block.Number - bigs.Uint64Strict(s.blocks[0].Number())
 	if s.blocks[idx].Hash() == block.Hash && idx < uint64(s.blockCursor) {
 		s.blockCursor = int(idx)
 	} else {
@@ -309,18 +310,28 @@ func (s *channelManager) getReadyChannel(l1Head eth.BlockID, pi pubInfo) (*chann
 		return firstWithTxData, nil
 	}
 
-	// No pending tx data, so we have to add new blocks to the channel
-	// If we have no saved blocks, we will not be able to create valid frames
-	if s.pendingBlocks() == 0 {
+	// If there are pending blocks, add them to a channel.
+	havePendingBlocks := s.pendingBlocks() > 0
+	if havePendingBlocks {
+		if err := s.ensureChannelWithSpace(l1Head); err != nil {
+			return nil, err
+		}
+		if err := s.processBlocks(); err != nil {
+			return nil, err
+		}
+	}
+
+	// Nothing to flush if there's no open channel.
+	if s.currentChannel == nil {
 		return nil, io.EOF
 	}
 
-	if err := s.ensureChannelWithSpace(l1Head); err != nil {
-		return nil, err
-	}
-
-	if err := s.processBlocks(); err != nil {
-		return nil, err
+	// If no blocks were added this call and the channel is already full, its
+	// frames were already produced by a prior call (and drained by the earlier
+	// HasTxData check above). Skip re-running outputFrames on an already-closed
+	// channel-out, which would error.
+	if !havePendingBlocks && s.currentChannel.IsFull() {
+		return nil, io.EOF
 	}
 
 	if !pi.ignoreMaxChannelDuration {

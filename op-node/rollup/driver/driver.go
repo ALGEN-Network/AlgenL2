@@ -22,6 +22,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sequencing"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/status"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/sync"
+	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/event"
 	"github.com/ethereum/go-ethereum/params"
@@ -48,7 +49,7 @@ func NewDriver(
 	syncCfg *sync.Config,
 	sequencerConductor conductor.SequencerConductor,
 	altDA AltDAIface,
-	indexingMode bool,
+	superAuthority rollup.SuperAuthority,
 ) *Driver {
 	driverCtx, driverCancel := context.WithCancel(context.Background())
 
@@ -60,22 +61,22 @@ func NewDriver(
 	l1 = metered.NewMeteredL1Fetcher(l1Tracker, metrics)
 	verifConfDepth := confdepth.NewConfDepth(driverCfg.VerifierConfDepth, statusTracker.L1Head, l1)
 
-	ec := engine.NewEngineController(driverCtx, l2, log, metrics, cfg, syncCfg, indexingMode, l1, sys.Register("engine-controller", nil))
+	ec := engine.NewEngineController(driverCtx, l2, log, metrics, cfg, syncCfg, l1, sys.Register("engine-controller", nil), superAuthority)
 	// TODO(#17115): Refactor dependency cycles
 	ec.SetCrossUpdateHandler(statusTracker)
 
 	var finalizer Finalizer
 	if cfg.AltDAEnabled() {
-		finalizer = finality.NewAltDAFinalizer(driverCtx, log, cfg, driverCfg.Finalizer, indexingMode, l1, altDA, ec)
+		finalizer = finality.NewAltDAFinalizer(driverCtx, log, cfg, driverCfg.Finalizer, l1, altDA, ec)
 	} else {
-		finalizer = finality.NewFinalizer(driverCtx, log, cfg, driverCfg.Finalizer, indexingMode, l1, ec)
+		finalizer = finality.NewFinalizer(driverCtx, log, cfg, driverCfg.Finalizer, l1, ec)
 	}
 	sys.Register("finalizer", finalizer)
 
 	attrHandler := attributes.NewAttributesHandler(log, cfg, driverCtx, l2, ec)
 	sys.Register("attributes-handler", attrHandler)
 
-	derivationPipeline := derive.NewDerivationPipeline(log, cfg, depSet, verifConfDepth, l1Blobs, altDA, l2, metrics, indexingMode, l1ChainConfig)
+	derivationPipeline := derive.NewDerivationPipeline(log, cfg, depSet, verifConfDepth, l1Blobs, altDA, l2, metrics, l1ChainConfig)
 
 	pipelineDeriver := derive.NewPipelineDeriver(driverCtx, derivationPipeline)
 	sys.Register("pipeline", pipelineDeriver)
@@ -88,22 +89,18 @@ func NewDriver(
 	sys.Register("step-scheduler", schedDeriv)
 
 	syncDeriver := &SyncDeriver{
-		Derivation:          derivationPipeline,
-		SafeHeadNotifs:      safeHeadListener,
-		Engine:              ec,
-		SyncCfg:             syncCfg,
-		Config:              cfg,
-		L1:                  l1,
-		L1Tracker:           l1Tracker,
-		L2:                  l2,
-		Log:                 log,
-		Ctx:                 driverCtx,
-		ManagedBySupervisor: indexingMode,
-		StepDeriver:         schedDeriv,
+		Derivation:     derivationPipeline,
+		SafeHeadNotifs: safeHeadListener,
+		Engine:         ec,
+		SyncCfg:        syncCfg,
+		Config:         cfg,
+		L1:             l1,
+		L1Tracker:      l1Tracker,
+		L2:             l2,
+		Log:            log,
+		Ctx:            driverCtx,
+		StepDeriver:    schedDeriv,
 	}
-	// TODO(#16917) Remove Event System Refactor Comments
-	//  Couple SyncDeriver and EngineController for event refactoring
-	//  Couple EngDeriver and NewAttributesHandler for event refactoring
 	ec.SyncDeriver = syncDeriver
 	sys.Register("sync", syncDeriver)
 	sys.Register("engine", ec)
@@ -119,8 +116,15 @@ func NewDriver(
 		// Connect origin selector to the engine controller for force reset notifications
 		ec.SetOriginSelectorResetter(findL1Origin)
 
-		sequencer = sequencing.NewSequencer(driverCtx, log, cfg, driverCfg.SequencerSealingDuration, attrBuilder, findL1Origin,
+		seq := sequencing.NewSequencer(driverCtx, log, cfg, driverCfg.SequencerSealingDuration, attrBuilder, findL1Origin,
 			sequencerStateListener, sequencerConductor, asyncGossiper, metrics, ec)
+		// Seed the persisted opt-in before attaching the listener so we don't write-back
+		// the value we just loaded. Without a listener attached, this call cannot fail.
+		_ = seq.SetSdmPostExecOptIn(driverCtx, driverCfg.SdmPostExecOptIn)
+		if sdmListener, ok := sequencerStateListener.(sequencing.SequencerSdmListener); ok {
+			seq.AttachSdmListener(sdmListener)
+		}
+		sequencer = seq
 		sys.Register("sequencer", sequencer)
 	} else {
 		sequencer = sequencing.DisabledSequencer{}
@@ -394,6 +398,15 @@ func (s *Driver) SequencerActive(ctx context.Context) (bool, error) {
 	return s.sequencer.Active(), nil
 }
 
+func (s *Driver) SetSdmPostExecOptIn(ctx context.Context, enabled bool) error {
+	return s.sequencer.SetSdmPostExecOptIn(ctx, enabled)
+}
+
+func (s *Driver) SdmStatus(ctx context.Context) (apis.SdmStatus, error) {
+	status := s.StatusTracker.SyncStatus()
+	return s.sequencer.SdmStatus(ctx, status.UnsafeL2.Time+s.SyncDeriver.Config.BlockTime)
+}
+
 func (s *Driver) OverrideLeader(ctx context.Context) error {
 	return s.sequencer.OverrideLeader(ctx)
 }
@@ -414,7 +427,9 @@ func (s *Driver) SyncStatus(ctx context.Context) (*eth.SyncStatus, error) {
 
 // BlockRefWithStatus blocks the driver event loop and captures the syncing status,
 // along with an L2 block reference by number consistent with that same status.
-// If the event loop is too busy and the context expires, a context error is returned.
+// If the event loop is too busy and the context expires before the request is
+// accepted, a context error is returned with a nil status. Otherwise the returned
+// status is non-nil, including when ref lookup fails with ethereum.NotFound.
 func (s *Driver) BlockRefWithStatus(ctx context.Context, num uint64) (eth.L2BlockRef, *eth.SyncStatus, error) {
 	resp := s.StatusTracker.SyncStatus()
 	if resp.FinalizedL2.Number >= num { // If finalized, we are certain it does not reorg, and don't have to lock.
@@ -489,17 +504,42 @@ func (s *Driver) followUpstream() {
 	status, err := s.upstreamFollowSource.GetFollowStatus(s.driverCtx)
 	if err != nil {
 		s.log.Warn("Follow Upstream: Failed to fetch status", "err", err)
+		s.metrics.RecordFollowSourceRequest("error_fetch_status")
 		return
 	}
-	s.log.Info("Follow Upstream", "eSafe", status.SafeL2, "eFinalized", status.FinalizedL2, "eCurrentL1", status.CurrentL1)
+	s.log.Info("Follow Upstream", "eSafe", status.SafeL2, "eLocalSafe", status.LocalSafeL2, "eFinalized", status.FinalizedL2, "eCurrentL1", status.CurrentL1)
+	if status.SafeL2.Number > status.LocalSafeL2.Number {
+		s.log.Warn("Follow Upstream: Invalid external state, safe is ahead of local safe",
+			"safe", status.SafeL2.Number, "localSafe", status.LocalSafeL2.Number)
+		s.metrics.RecordFollowSourceRequest("error_invalid_state")
+		return
+	}
 	if status.FinalizedL2.Number > status.SafeL2.Number {
 		s.log.Warn("Follow Upstream: Invalid external state, finalized is ahead of safe", "safe", status.SafeL2.Number, "finalized", status.FinalizedL2.Number)
+		s.metrics.RecordFollowSourceRequest("error_invalid_state")
+		return
+	}
+
+	eLocalSafeL1Origin, err := s.upstreamFollowSource.L1BlockRefByNumber(s.driverCtx, status.LocalSafeL2.L1Origin.Number)
+	if err != nil {
+		s.log.Warn("Follow Upstream: Failed to look up L1 origin of external local safe head", "err", err)
+		s.metrics.RecordFollowSourceRequest("error_l1_lookup")
+		return
+	}
+	if eLocalSafeL1Origin.Hash != status.LocalSafeL2.L1Origin.Hash {
+		s.log.Warn(
+			"Follow Upstream: Invalid external local safe: L1 origin of external local safe head mismatch",
+			"actual", eLocalSafeL1Origin,
+			"expected", status.LocalSafeL2.L1Origin,
+		)
+		s.metrics.RecordFollowSourceRequest("error_l1_mismatch")
 		return
 	}
 
 	eSafeL1Origin, err := s.upstreamFollowSource.L1BlockRefByNumber(s.driverCtx, status.SafeL2.L1Origin.Number)
 	if err != nil {
 		s.log.Warn("Follow Upstream: Failed to look up L1 origin of external safe head", "err", err)
+		s.metrics.RecordFollowSourceRequest("error_l1_lookup")
 		return
 	}
 	if eSafeL1Origin.Hash != status.SafeL2.L1Origin.Hash {
@@ -508,12 +548,14 @@ func (s *Driver) followUpstream() {
 			"actual", eSafeL1Origin,
 			"expected", status.SafeL2.L1Origin,
 		)
+		s.metrics.RecordFollowSourceRequest("error_l1_mismatch")
 		return
 	}
 
 	eFinalizedL1Origin, err := s.upstreamFollowSource.L1BlockRefByNumber(s.driverCtx, status.FinalizedL2.L1Origin.Number)
 	if err != nil {
 		s.log.Warn("Follow Upstream: Failed to look up L1 origin of external finalized head", "err", err)
+		s.metrics.RecordFollowSourceRequest("error_l1_lookup")
 		return
 	}
 	if eFinalizedL1Origin.Hash != status.FinalizedL2.L1Origin.Hash {
@@ -522,6 +564,7 @@ func (s *Driver) followUpstream() {
 			"actual", eFinalizedL1Origin,
 			"expected", status.FinalizedL2.L1Origin,
 		)
+		s.metrics.RecordFollowSourceRequest("error_l1_mismatch")
 		return
 	}
 
@@ -531,6 +574,7 @@ func (s *Driver) followUpstream() {
 		eCurrentL1, err := s.upstreamFollowSource.L1BlockRefByNumber(s.driverCtx, status.CurrentL1.Number)
 		if err != nil {
 			s.log.Warn("Follow Upstream: Failed to look up external currentL1", "err", err)
+			s.metrics.RecordFollowSourceRequest("error_l1_lookup")
 			return
 		}
 		if eCurrentL1.Hash != status.CurrentL1.Hash {
@@ -539,6 +583,7 @@ func (s *Driver) followUpstream() {
 				"actual", eCurrentL1,
 				"expected", status.CurrentL1,
 			)
+			s.metrics.RecordFollowSourceRequest("error_l1_mismatch")
 			return
 		}
 
@@ -546,5 +591,6 @@ func (s *Driver) followUpstream() {
 		s.emitter.Emit(s.driverCtx, derive.DeriverL1StatusEvent{Origin: status.CurrentL1})
 	}
 	// Only reach this point if all L1 checks passed
-	s.SyncDeriver.Engine.FollowSource(status.SafeL2, status.FinalizedL2)
+	s.metrics.RecordFollowSourceRequest("success")
+	s.SyncDeriver.Engine.FollowSource(status.SafeL2, status.LocalSafeL2, status.FinalizedL2)
 }

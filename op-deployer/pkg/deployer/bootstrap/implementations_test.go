@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/testutil"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -58,12 +59,12 @@ func testImplementations(t *testing.T, forkRPCURL string) {
 	chainID, err := client.ChainID(ctx)
 	require.NoError(t, err)
 
-	superchain, err := standard.SuperchainFor(chainID.Uint64())
+	superchain, err := standard.SuperchainFor(bigs.Uint64Strict(chainID))
 	require.NoError(t, err)
 
 	loc, _ := testutil.LocalArtifacts(t)
 
-	proxyAdminOwner, err := standard.L1ProxyAdminOwner(uint64(chainID.Uint64()))
+	proxyAdminOwner, err := standard.L1ProxyAdminOwner(bigs.Uint64Strict(chainID))
 	require.NoError(t, err)
 	deploy := func() opcm.DeployImplementationsOutput {
 		out, err := Implementations(ctx, ImplementationsConfig{
@@ -79,7 +80,6 @@ func testImplementations(t *testing.T, forkRPCURL string) {
 			MIPSVersion:                     int(standard.MIPSVersion),
 			DevFeatureBitmap:                common.Hash{},
 			SuperchainConfigProxy:           superchain.SuperchainConfigAddr,
-			ProtocolVersionsProxy:           superchain.ProtocolVersionsAddr,
 			SuperchainProxyAdmin:            proxyAdminOwner,
 			L1ProxyAdminOwner:               proxyAdminOwner,
 			Challenger:                      common.Address{'C'},
@@ -96,9 +96,9 @@ func testImplementations(t *testing.T, forkRPCURL string) {
 	// Assert that addresses stay the same between runs
 	t.Log("Deploying first implementation contracts bundle")
 	deployment1 := deploy()
-	require.NotEqual(t, common.Address{}, deployment1.Opcm, "Opcm address should be set")
+	require.NotEqual(t, common.Address{}, deployment1.OpcmV2, "OpcmV2 address should be set")
 	t.Log("Deploying second implementation contracts bundle")
 	deployment2 := deploy()
-	require.NotEqual(t, common.Address{}, deployment2.Opcm, "Opcm address should be set")
+	require.NotEqual(t, common.Address{}, deployment2.OpcmV2, "OpcmV2 address should be set")
 	require.Equal(t, deployment1, deployment2)
 }

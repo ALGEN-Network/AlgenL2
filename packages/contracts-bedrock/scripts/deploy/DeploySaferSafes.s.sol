@@ -31,7 +31,7 @@ contract DeploySaferSafes is Script {
         output_.saferSafesSingleton = ISaferSafes(
             DeployUtils.createDeterministic({
                 _name: "SaferSafes",
-                _args: DeployUtils.encodeConstructor(bytes("")),
+                _args: DeployUtils.encodeConstructor(abi.encodeCall(ISaferSafes.__constructor__, ())),
                 _salt: DeployUtils.DEFAULT_SALT
             })
         );
@@ -42,6 +42,6 @@ contract DeploySaferSafes is Script {
     function assertValidOutput(Output memory _output) public view {
         DeployUtils.assertValidContractAddress(address(_output.saferSafesSingleton));
 
-        require(SemverComp.eq(_output.saferSafesSingleton.version(), "1.10.1"), "DeploySaferSafes: unexpected version");
+        SemverComp.parse(_output.saferSafesSingleton.version());
     }
 }

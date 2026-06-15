@@ -129,9 +129,13 @@ type Config struct {
 	// Active if JovianTime != nil && L2 block timestamp >= *JovianTime, inactive otherwise.
 	JovianTime *uint64 `json:"jovian_time,omitempty"`
 
-	// InteropTime sets the activation time for an experimental feature-set, activated like a hardfork.
-	// Active if InteropTime != nil && L2 block timestamp >= *InteropTime, inactive otherwise.
-	InteropTime *uint64 `json:"interop_time,omitempty"`
+	// KarstTime sets the activation time of the Karst network upgrade.
+	// Active if KarstTime != nil && L2 block timestamp >= *KarstTime, inactive otherwise.
+	KarstTime *uint64 `json:"karst_time,omitempty"`
+
+	// LagoonTime sets the activation time for an experimental feature-set, activated like a hardfork.
+	// Active if LagoonTime != nil && L2 block timestamp >= *LagoonTime, inactive otherwise.
+	LagoonTime *uint64 `json:"lagoon_time,omitempty"`
 
 	// Note: below addresses are part of the block-derivation process,
 	// and required to be the same network-wide to stay in consensus.
@@ -142,9 +146,6 @@ type Config struct {
 	DepositContractAddress common.Address `json:"deposit_contract_address"`
 	// L1 System Config Address
 	L1SystemConfigAddress common.Address `json:"l1_system_config_address"`
-
-	// L1 address that declares the protocol versions, optional (Beta feature)
-	ProtocolVersionsAddress common.Address `json:"protocol_versions_address,omitempty"`
 
 	// ChainOpConfig is the OptimismConfig of the execution layer ChainConfig.
 	// It is used during safe chain consolidation to translate zero SystemConfig EIP1559
@@ -203,6 +204,9 @@ func (cfg *Config) TimestampForBlock(blockNumber uint64) uint64 {
 	return cfg.Genesis.L2Time + ((blockNumber - cfg.Genesis.L2.Number) * cfg.BlockTime)
 }
 
+// TargetBlockNumber returns the L2 block number for the given timestamp.
+// If the timestamp is before the genesis time, it returns an error.
+// All other cases should return a valid block number.
 func (cfg *Config) TargetBlockNumber(timestamp uint64) (num uint64, err error) {
 	// subtract genesis time from timestamp to get the time elapsed since genesis, and then divide that
 	// difference by the block time to get the expected L2 block number at the current time. If the
@@ -482,9 +486,14 @@ func (c *Config) IsJovian(timestamp uint64) bool {
 	return c.IsForkActive(forks.Jovian, timestamp)
 }
 
-// IsInterop returns true if the Interop hardfork is active at or past the given timestamp.
-func (c *Config) IsInterop(timestamp uint64) bool {
-	return c.IsForkActive(forks.Interop, timestamp)
+// IsKarst returns true if the Karst hardfork is active at or past the given timestamp.
+func (c *Config) IsKarst(timestamp uint64) bool {
+	return c.IsForkActive(forks.Karst, timestamp)
+}
+
+// IsLagoon returns true if the Lagoon hardfork is active at or past the given timestamp.
+func (c *Config) IsLagoon(timestamp uint64) bool {
+	return c.IsForkActive(forks.Lagoon, timestamp)
 }
 
 func (c *Config) IsRegolithActivationBlock(l2BlockTime uint64) bool {
@@ -553,17 +562,29 @@ func (c *Config) IsJovianActivationBlock(l2BlockTime uint64) bool {
 		!c.IsJovian(l2BlockTime-c.BlockTime)
 }
 
-func (c *Config) IsInteropActivationBlock(l2BlockTime uint64) bool {
-	return c.IsInterop(l2BlockTime) &&
+// IsKarstActivationBlock returns whether the specified block is the first block subject to the
+// Karst upgrade.
+func (c *Config) IsKarstActivationBlock(l2BlockTime uint64) bool {
+	return c.IsKarst(l2BlockTime) &&
 		l2BlockTime >= c.BlockTime &&
-		!c.IsInterop(l2BlockTime-c.BlockTime)
+		!c.IsKarst(l2BlockTime-c.BlockTime)
+}
+
+// IsLagoonActivationBlock returns whether the specified block is the first block subject to the
+// Lagoon upgrade.
+func (c *Config) IsLagoonActivationBlock(l2BlockTime uint64) bool {
+	return c.IsLagoon(l2BlockTime) &&
+		l2BlockTime >= c.BlockTime &&
+		!c.IsLagoon(l2BlockTime-c.BlockTime)
 }
 
 func (c *Config) ActivationTime(fork ForkName) *uint64 {
 	// NEW FORKS MUST BE ADDED HERE
 	switch fork {
-	case forks.Interop:
-		return c.InteropTime
+	case forks.Lagoon:
+		return c.LagoonTime
+	case forks.Karst:
+		return c.KarstTime
 	case forks.Jovian:
 		return c.JovianTime
 	case forks.Isthmus:
@@ -595,8 +616,10 @@ func (c *Config) ActivationTime(fork ForkName) *uint64 {
 func (c *Config) SetActivationTime(fork ForkName, timestamp *uint64) {
 	// NEW FORKS MUST BE ADDED HERE
 	switch fork {
-	case forks.Interop:
-		c.InteropTime = timestamp
+	case forks.Lagoon:
+		c.LagoonTime = timestamp
+	case forks.Karst:
+		c.KarstTime = timestamp
 	case forks.Jovian:
 		c.JovianTime = timestamp
 	case forks.Isthmus:
@@ -706,7 +729,10 @@ func (c *Config) NewPayloadVersion(timestamp uint64) eth.EngineAPIMethod {
 
 // GetPayloadVersion returns the EngineAPIMethod suitable for the chain hard fork version.
 func (c *Config) GetPayloadVersion(timestamp uint64) eth.EngineAPIMethod {
-	if c.IsIsthmus(timestamp) {
+	if c.IsKarst(timestamp) {
+		// Osaka
+		return eth.GetPayloadV5
+	} else if c.IsIsthmus(timestamp) {
 		return eth.GetPayloadV4
 	} else if c.IsEcotone(timestamp) {
 		// Cancun
@@ -783,8 +809,6 @@ func (c *Config) Description(l2Chains map[string]string) string {
 	c.forEachFork(func(name string, _ string, time *uint64) {
 		banner += fmt.Sprintf("  - %v: %s\n", name, fmtForkTimeOrUnset(time))
 	})
-	// Report the protocol version
-	banner += fmt.Sprintf("Node supports up to OP-Stack Protocol Version: %s\n", OPStackSupport)
 	if c.AltDAConfig != nil {
 		banner += fmt.Sprintf("Node supports Alt-DA Mode with CommitmentType %v\n", c.AltDAConfig.CommitmentType)
 	}
@@ -842,12 +866,31 @@ func (c *Config) forEachFork(callback func(name string, logName string, time *ui
 	}
 	callback("Isthmus", "isthmus_time", c.IsthmusTime)
 	callback("Jovian", "jovian_time", c.JovianTime)
-	callback("Interop", "interop_time", c.InteropTime)
+	callback("Karst", "karst_time", c.KarstTime)
+	callback("Lagoon", "lagoon_time", c.LagoonTime)
+}
+
+// UnmarshalJSON accepts the legacy `interop_time` JSON key as an alias for
+// `lagoon_time`, mirroring the Rust HardForkConfig `#[serde(alias = "interop_time")]`
+// carveout. Drop both once superchain-registry renames the TOML key to
+// `lagoon_time` — tracked in ethereum-optimism/optimism#21135.
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type rawConfig Config
+	aux := struct {
+		InteropTime *uint64 `json:"interop_time,omitempty"`
+		*rawConfig
+	}{rawConfig: (*rawConfig)(c)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if c.LagoonTime == nil && aux.InteropTime != nil {
+		c.LagoonTime = aux.InteropTime
+	}
+	return nil
 }
 
 func (c *Config) ParseRollupConfig(in io.Reader) error {
 	dec := json.NewDecoder(in)
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(c); err != nil {
 		return fmt.Errorf("failed to decode rollup config: %w", err)
 	}

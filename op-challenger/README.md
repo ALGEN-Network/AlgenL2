@@ -9,8 +9,7 @@ the [fault proof specs][proof-specs].
 
 ## Quickstart
 
-To build the `op-challenger`, run `make` (which executes the `make build`
-[Makefile](./Makefile) target). To view a list of available commands and
+To build the `op-challenger`, run `just op-challenger`. To view a list of available commands and
 options, run `./bin/op-challenger --help`.
 
 ## Usage
@@ -21,30 +20,26 @@ accessed by running `./op-challenger --help`.
 
 ### Running with Cannon on Local Devnet
 
-To run `op-challenger` against the local devnet, first clean and run
-the devnet. From the root of the repository run:
+To run `op-challenger` against a local devnet, first start a local devnet
+that exposes the `simple-devnet` enclave.
 
-```shell
-cd kurtosis-devnet && just simple-devnet
-```
-
-Then build the `op-challenger` with `make op-challenger`.
+Then build the `op-challenger` with `just op-challenger`.
 
 Run the `op-challenger` with:
 
 ```shell
 DISPUTE_GAME_FACTORY=$(jq -r .DisputeGameFactoryProxy .devnet/addresses.json)
 ./op-challenger/bin/op-challenger \
-  --game-types cannon \
+  --game-types cannon-kona \
   --l1-eth-rpc http://localhost:8545 \
   --rollup-rpc http://localhost:9546 \
   --game-factory-address $DISPUTE_GAME_FACTORY \
   --datadir temp/challenger-data \
-  --cannon-rollup-config .devnet/rollup.json  \
-  --cannon-l2-genesis .devnet/genesis-l2.json \
+  --cannon-kona-rollup-config .devnet/rollup.json  \
+  --cannon-kona-l2-genesis .devnet/genesis-l2.json \
   --cannon-bin ./cannon/bin/cannon \
-  --cannon-server ./op-program/bin/op-program \
-  --cannon-prestate ./op-program/bin/prestate.bin.gz \
+  --cannon-kona-server ./rust/target/release/kona-host \
+  --cannon-kona-prestate ./rust/kona/prestate-artifacts-cannon/prestate.bin.gz \
   --l2-eth-rpc http://localhost:9545 \
   --mnemonic "test test test test test test test test test test test junk" \
   --hd-path "m/44'/60'/0'/0/8" \
@@ -55,6 +50,12 @@ The mnemonic and hd-path above is a prefunded address on the devnet.
 The challenger will monitor dispute games and respond to any invalid
 claims by posting the correct trace as the counter-claim. The commands
 below can then be used to create and interact with games.
+
+`--cannon-kona-server` provides the kona-host binary used to generate fault
+proofs. The `permissioned` game type (configured via the `--cannon-*` flags)
+is played only by trusted actors and resolves at the output-root level without
+ever reaching `step()`, so it does not run a fault-proof program and its server
+binary may be omitted when only the `permissioned` game type is configured.
 
 #### Devnet Management Commands
 

@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script/forking"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/srcmap"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 )
 
 // jumpHistory is the amount of successful jumps to track for debugging.
@@ -240,6 +241,7 @@ func NewHost(
 		GraniteTime:  nil,
 		HoloceneTime: nil,
 		JovianTime:   nil,
+		KarstTime:    nil,
 		InteropTime:  nil,
 		Optimism:     nil,
 	}
@@ -278,15 +280,13 @@ func NewHost(
 		BlobBaseFee: big.NewInt(0),
 		Random:      &executionContext.PrevRandao,
 	}
-
 	// Initialize a transaction-context for the EVM to access environment variables.
 	// The transaction context (after embedding inside of the EVM environment) may be mutated later.
 	txContext := vm.TxContext{
 		Origin:       executionContext.Origin,
-		GasPrice:     big.NewInt(0),
+		GasPrice:     uint256.NewInt(0),
 		BlobHashes:   executionContext.BlobHashes,
-		BlobFeeCap:   big.NewInt(0),
-		AccessEvents: state.NewAccessEvents(h.baseState.PointCache()),
+		AccessEvents: state.NewAccessEvents(),
 	}
 
 	// Hook up the Host to capture the EVM environment changes
@@ -792,7 +792,7 @@ func (h *Host) StateDump() (*foundry.ForgeAllocs, error) {
 	baseState := h.baseState
 	// We have to commit the existing state to the trie,
 	// for all the state-changes to be captured by the trie iterator.
-	root, err := baseState.Commit(h.env.Context().BlockNumber.Uint64(), true, false)
+	root, err := baseState.Commit(bigs.Uint64Strict(h.env.Context().BlockNumber), true, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit state: %w", err)
 	}

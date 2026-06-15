@@ -17,15 +17,14 @@ import (
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/opcmregistry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/upgrade/embedded"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -64,8 +63,6 @@ func NewChainIntent(t *testing.T, dk *devkeys.MnemonicDevKeys, l1ChainID *big.In
 			Proposer:          AddrFor(t, dk, devkeys.ProposerRole.Key(l1ChainID)),
 			Challenger:        AddrFor(t, dk, devkeys.ChallengerRole.Key(l1ChainID)),
 		},
-		UseRevenueShare:    false,
-		ChainFeesRecipient: common.Address{},
 		// CustomGasToken defaults to disabled (all fields nil/empty)
 		CustomGasToken: state.CustomGasToken{},
 	}
@@ -82,10 +79,9 @@ func NewIntent(
 ) (*state.Intent, *state.State) {
 	intent := &state.Intent{
 		ConfigType: state.IntentTypeCustom,
-		L1ChainID:  l1ChainID.Uint64(),
+		L1ChainID:  bigs.Uint64Strict(l1ChainID),
 		SuperchainRoles: &addresses.SuperchainRoles{
 			SuperchainProxyAdminOwner: AddrFor(t, dk, devkeys.L1ProxyAdminOwnerRole.Key(l1ChainID)),
-			ProtocolVersionsOwner:     AddrFor(t, dk, devkeys.SuperchainDeployerKey.Key(l1ChainID)),
 			SuperchainGuardian:        AddrFor(t, dk, devkeys.SuperchainConfigGuardianKey.Key(l1ChainID)),
 			Challenger:                AddrFor(t, dk, devkeys.ChallengerRole.Key(l1ChainID)),
 		},
@@ -113,6 +109,9 @@ func DefaultPrivkey(t *testing.T) (string, *ecdsa.PrivateKey, *devkeys.MnemonicD
 
 	return pkHex, pk, dk
 }
+
+// defaultInitBond matches Deploy.s.sol DEFAULT_INIT_BOND (0.08 ether).
+var defaultInitBond = big.NewInt(8e16)
 
 // lastUsedOPCMVersionSelector is the selector for SystemConfig.lastUsedOPCMVersion()
 // keccak256("lastUsedOPCMVersion()")[:4] = 0x9fabcc84
@@ -210,7 +209,7 @@ func getLastUsedOPCMVersion(caller ContractCaller, systemConfigProxy common.Addr
 func runSingleOPCMUpgradeResolved(t *testing.T, host *script.Host, prank, systemConfigProxy common.Address, opcm opcmregistry.ResolvedOPCM) bool {
 	t.Helper()
 
-	upgradeConfig := buildOPCMUpgradeConfig(t, prank, opcm.Address, systemConfigProxy, opcm.OPCMVersion)
+	upgradeConfig := buildOPCMUpgradeConfig(t, prank, opcm.Address, systemConfigProxy)
 	if upgradeConfig == nil {
 		return false
 	}
@@ -228,23 +227,9 @@ func runSingleOPCMUpgradeResolved(t *testing.T, host *script.Host, prank, system
 }
 
 // buildOPCMUpgradeConfig builds the upgrade config for the given OPCM.
-func buildOPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy common.Address, version opcmregistry.Semver) *embedded.UpgradeOPChainInput {
+func buildOPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy common.Address) *embedded.UpgradeOPChainInput {
 	t.Helper()
 
-	if version.IsV1OPCM() {
-		// V1 OPCM (6.x.x) - uses ChainConfigs with prestates
-		return &embedded.UpgradeOPChainInput{
-			Prank: prank,
-			Opcm:  opcmAddr,
-			ChainConfigs: []embedded.OPChainConfig{{
-				SystemConfigProxy:  systemConfigProxy,
-				CannonPrestate:     opcmregistry.DummyCannonPrestate,
-				CannonKonaPrestate: opcmregistry.DummyCannonKonaPrestate,
-			}},
-		}
-	}
-
-	// V2 OPCM (7.x.x+) - uses UpgradeInputV2 with dispute game configs
 	cfg := buildV2OPCMUpgradeConfig(t, prank, opcmAddr, systemConfigProxy)
 	return &cfg
 }
@@ -255,37 +240,47 @@ func buildV2OPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy c
 
 	// Build dispute game configs with dummy prestates
 	// CANNON and PERMISSIONED_CANNON are the standard game types
-	cannonArgs, err := abi.Arguments{{Type: deployer.Bytes32Type}}.Pack(opcmregistry.DummyCannonPrestate)
-	require.NoError(t, err)
-
-	permissionedArgs, err := abi.Arguments{
-		{Type: deployer.Bytes32Type},
-		{Type: deployer.AddressType},
-		{Type: deployer.AddressType},
-	}.Pack(opcmregistry.DummyCannonPrestate, common.Address{}, common.Address{})
-	require.NoError(t, err)
-
-	cannonKonaArgs, err := abi.Arguments{{Type: deployer.Bytes32Type}}.Pack(opcmregistry.DummyCannonKonaPrestate)
-	require.NoError(t, err)
-
 	disputeGameConfigs := []embedded.DisputeGameConfig{
 		{
 			Enabled:  true,
-			InitBond: big.NewInt(0),
+			InitBond: new(big.Int).Set(defaultInitBond),
 			GameType: embedded.GameTypeCannon,
-			GameArgs: cannonArgs,
+			FaultDisputeGameConfig: &embedded.FaultDisputeGameConfig{
+				AbsolutePrestate: opcmregistry.DummyCannonPrestate,
+			},
 		},
 		{
 			Enabled:  true,
-			InitBond: big.NewInt(0),
+			InitBond: new(big.Int).Set(defaultInitBond),
 			GameType: embedded.GameTypePermissionedCannon,
-			GameArgs: permissionedArgs,
+			PermissionedDisputeGameConfig: &embedded.PermissionedDisputeGameConfig{
+				AbsolutePrestate: opcmregistry.DummyCannonPrestate,
+				Proposer:         common.Address{},
+				Challenger:       common.Address{},
+			},
 		},
 		{
 			Enabled:  true,
-			InitBond: big.NewInt(0),
+			InitBond: new(big.Int).Set(defaultInitBond),
 			GameType: embedded.GameTypeCannonKona,
-			GameArgs: cannonKonaArgs,
+			FaultDisputeGameConfig: &embedded.FaultDisputeGameConfig{
+				AbsolutePrestate: opcmregistry.DummyCannonKonaPrestate,
+			},
+		},
+		{
+			Enabled:  false,
+			InitBond: big.NewInt(0),
+			GameType: embedded.GameTypeSuperPermCannon,
+		},
+		{
+			Enabled:  false,
+			InitBond: big.NewInt(0),
+			GameType: embedded.GameTypeSuperCannonKona,
+		},
+		{
+			Enabled:  false,
+			InitBond: big.NewInt(0),
+			GameType: embedded.GameTypeZKDisputeGame,
 		},
 	}
 
@@ -305,8 +300,8 @@ func buildV2OPCMUpgradeConfig(t *testing.T, prank, opcmAddr, systemConfigProxy c
 	}
 }
 
-// deployDummyCaller deploys DummyCaller at the prank address with the given OPCM address.
-func deployDummyCaller(t *testing.T, rpcClient *rpc.Client, afactsFS foundry.StatDirFs, prank, opcmAddr common.Address) {
+// DeployDummyCaller deploys DummyCaller at the prank address with the given OPCM address.
+func DeployDummyCaller(t *testing.T, rpcClient *rpc.Client, afactsFS foundry.StatDirFs, prank, opcmAddr common.Address) {
 	t.Helper()
 
 	artifacts := &foundry.ArtifactsFS{FS: afactsFS}
@@ -435,7 +430,7 @@ func RunPastUpgradesWithRPC(t *testing.T, l1RPCUrl string, afactsFS foundry.Stat
 	// Process each OPCM upgrade: deploy DummyCaller with correct OPCM, run upgrade, broadcast
 	for _, opcm := range toApply {
 		// Deploy DummyCaller with this OPCM's address
-		deployDummyCaller(t, rpcClient, afactsFS, prank, opcm.Address)
+		DeployDummyCaller(t, rpcClient, afactsFS, prank, opcm.Address)
 
 		// Create fresh broadcaster and host for this upgrade
 		bcaster := NewImpersonationBroadcaster(lgr, ethClient, rpcClient, prank, networkChainID)

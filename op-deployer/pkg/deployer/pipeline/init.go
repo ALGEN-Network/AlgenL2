@@ -44,11 +44,16 @@ func InitLiveStrategy(ctx context.Context, env *Env, intent *state.Intent, st *s
 			superchainConfigAddr = *intent.SuperchainConfigProxy
 		}
 
-		// The ReadSuperchainDeployment script (packages/contracts-bedrock/scripts/deploy/ReadSuperchainDeployment.s.sol)
-		// uses the OPCM's semver version (>= 7.0.0 indicates v2) to determine how to populate the superchain state:
-		// - OPCMv1 (< 7.0.0): Queries the OPCM contract to get SuperchainConfig and ProtocolVersions
-		// - OPCMv2 (>= 7.0.0): Uses the provided SuperchainConfigProxy address; ProtocolVersions is deprecated
-		superDeployment, superRoles, err := PopulateSuperchainState(env.L1ScriptHost, opcmAddr, superchainConfigAddr)
+		// If only an OPCM address is provided, resolve SuperchainConfigProxy from it on-chain.
+		if superchainConfigAddr == (common.Address{}) && opcmAddr != (common.Address{}) {
+			opcmContract := opcm.NewContract(opcmAddr, env.L1Client)
+			resolved, err := opcmContract.SuperchainConfig(ctx)
+			if err != nil {
+				return fmt.Errorf("error resolving SuperchainConfig from OPCM at %s: %w", opcmAddr, err)
+			}
+			superchainConfigAddr = resolved
+		}
+		superDeployment, superRoles, err := PopulateSuperchainState(env, opcmAddr, superchainConfigAddr)
 		if err != nil {
 			return fmt.Errorf("error populating superchain state: %w", err)
 		}
@@ -57,7 +62,7 @@ func InitLiveStrategy(ctx context.Context, env *Env, intent *state.Intent, st *s
 
 		if hasPredeployedOPCM && st.ImplementationsDeployment == nil {
 			st.ImplementationsDeployment = &addresses.ImplementationsContracts{
-				OpcmImpl: opcmAddr,
+				OpcmV2Impl: opcmAddr,
 			}
 		}
 	}
@@ -137,33 +142,44 @@ func immutableErr(field string, was, is any) error {
 	return fmt.Errorf("%s is immutable: was %v, is %v", field, was, is)
 }
 
-// TODO(#18612): Remove OPCMAddress field when OPCMv1 gets deprecated
-// TODO(#18612): Remove ProtocolVersions fields when OPCMv1 gets deprecated
-func PopulateSuperchainState(host *script.Host, opcmAddr common.Address, superchainConfigProxy common.Address) (*addresses.SuperchainContracts, *addresses.SuperchainRoles, error) {
-	readScript, err := opcm.NewReadSuperchainDeploymentScript(host)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error generating read superchain deployment script: %w", err)
+func PopulateSuperchainState(env *Env, opcmAddr common.Address, superchainConfigProxy common.Address) (*addresses.SuperchainContracts, *addresses.SuperchainRoles, error) {
+	input := opcm.ReadSuperchainDeploymentInput{
+		SuperchainConfigProxy: superchainConfigProxy,
 	}
 
-	out, err := readScript.Run(opcm.ReadSuperchainDeploymentInput{
-		OPCMAddress:           opcmAddr,
-		SuperchainConfigProxy: superchainConfigProxy,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("error reading superchain deployment: %w", err)
+	var out opcm.ReadSuperchainDeploymentOutput
+	var err error
+
+	if env.UseForge {
+		forgeEnv := &opcm.ForgeEnv{
+			Client:   env.ForgeClient,
+			Context:  env.Context,
+			L1RPCUrl: env.L1RPCUrl,
+		}
+		out, err = opcm.ReadSuperchainDeploymentViaForge(forgeEnv, input)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		readScript, err := opcm.NewReadSuperchainDeploymentScript(env.L1ScriptHost)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error generating read superchain deployment script: %w", err)
+		}
+
+		out, err = readScript.Run(input)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error reading superchain deployment: %w", err)
+		}
 	}
 
 	deployment := &addresses.SuperchainContracts{
 		SuperchainProxyAdminImpl: out.SuperchainProxyAdmin,
 		SuperchainConfigProxy:    out.SuperchainConfigProxy,
 		SuperchainConfigImpl:     out.SuperchainConfigImpl,
-		ProtocolVersionsProxy:    out.ProtocolVersionsProxy,
-		ProtocolVersionsImpl:     out.ProtocolVersionsImpl,
 	}
 	roles := &addresses.SuperchainRoles{
 		SuperchainProxyAdminOwner: out.SuperchainProxyAdminOwner,
 		SuperchainGuardian:        out.Guardian,
-		ProtocolVersionsOwner:     out.ProtocolVersionsOwner,
 	}
 	return deployment, roles, nil
 }

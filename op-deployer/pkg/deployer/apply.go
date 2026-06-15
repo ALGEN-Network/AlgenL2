@@ -9,7 +9,6 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-service/ioutil"
 
-	"github.com/ethereum-optimism/optimism/devnet-sdk/proofs/prestate"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/script/forking"
@@ -21,6 +20,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/verify"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	opcrypto "github.com/ethereum-optimism/optimism/op-service/crypto"
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
@@ -40,7 +40,6 @@ type ApplyConfig struct {
 	Logger           log.Logger
 	CacheDir         string
 	privateKeyECDSA  *ecdsa.PrivateKey
-	PreStateBuilder  pipeline.PreStateBuilder
 	UseForge         bool
 }
 
@@ -91,13 +90,6 @@ func ApplyCLI() func(cliCtx *cli.Context) error {
 		privateKey := cliCtx.String(PrivateKeyFlagName)
 		cacheDir := cliCtx.String(CacheDirFlagName)
 		depTarget, err := NewDeploymentTarget(cliCtx.String(DeploymentTargetFlag.Name))
-		opProgramSvcUrl := cliCtx.String(OpProgramSvcUrlFlag.Name)
-
-		var preStateBuilder pipeline.PreStateBuilder
-		if opProgramSvcUrl != "" {
-			preStateBuilder = prestate.NewPrestateBuilderClient(opProgramSvcUrl)
-		}
-
 		if err != nil {
 			return fmt.Errorf("failed to parse deployment target: %w", err)
 		}
@@ -111,7 +103,6 @@ func ApplyCLI() func(cliCtx *cli.Context) error {
 			DeploymentTarget: depTarget,
 			Logger:           l,
 			CacheDir:         cacheDir,
-			PreStateBuilder:  preStateBuilder,
 			UseForge:         cliCtx.Bool(UseForgeFlagName),
 		}); err != nil {
 			return err
@@ -136,7 +127,7 @@ func ApplyCLI() func(cliCtx *cli.Context) error {
 			ctx,
 			l,
 			l1RPCUrl,
-			chainID.Uint64(),
+			bigs.Uint64Strict(chainID),
 			stateFile,
 			intent.L1ContractsLocator,
 			cliCtx.String(VerifierTypeFlagName),
@@ -170,9 +161,9 @@ func Apply(ctx context.Context, cfg ApplyConfig) error {
 		Logger:             cfg.Logger,
 		StateWriter:        pipeline.WorkdirStateWriter(cfg.Workdir),
 		CacheDir:           cfg.CacheDir,
-		PreStateBuilder:    cfg.PreStateBuilder,
 		UseForge:           cfg.UseForge,
 		PrivateKey:         cfg.PrivateKey,
+		Workdir:            cfg.Workdir,
 	}); err != nil {
 		return err
 	}
@@ -194,9 +185,9 @@ type ApplyPipelineOpts struct {
 	Logger             log.Logger
 	StateWriter        pipeline.StateWriter
 	CacheDir           string
-	PreStateBuilder    pipeline.PreStateBuilder
 	UseForge           bool
 	PrivateKey         string
+	Workdir            string
 }
 
 func ApplyPipeline(
@@ -342,6 +333,8 @@ func ApplyPipeline(
 	// Initialize Forge client if UseForge flag is enabled
 	var forgeClient *forge.Client
 	if opts.UseForge {
+		// Forge needs to run from the artifacts directory where foundry.toml is located
+		// The workdir is for storing state, not for running forge commands
 		artifactsPath := fmt.Sprintf("%v", bundle.L1)
 		forgeClient, err = forge.NewStandardClient(artifactsPath)
 		if err != nil {
@@ -461,13 +454,19 @@ func ApplyPipeline(
 		},
 	})
 
-	// Generate the prestate for all chains
-	pline = append(pline, pipelineStage{
-		"deploy-pre-state",
-		func() error {
-			return pipeline.GeneratePreState(ctx, pEnv, intent, st, opts.PreStateBuilder)
-		},
-	})
+	// Validate that the deployed state renders into a valid L2 genesis and rollup
+	// config for every chain, so an invalid intent fails during apply rather than
+	// later at inspect time.
+	for _, chain := range intent.Chains {
+		chainID := chain.ID
+		pline = append(pline, pipelineStage{
+			fmt.Sprintf("validate-l2-genesis-%s", chainID.Hex()),
+			func() error {
+				_, _, err := pipeline.RenderGenesisAndRollup(st, chainID, intent)
+				return err
+			},
+		})
+	}
 
 	// Run through the pipeline.
 	for _, stage := range pline {

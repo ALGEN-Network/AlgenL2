@@ -7,7 +7,8 @@ import { IAddressManager } from "interfaces/legacy/IAddressManager.sol";
 import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
 import { IAnchorStateRegistry } from "interfaces/dispute/IAnchorStateRegistry.sol";
 import { IDelayedWETH } from "interfaces/dispute/IDelayedWETH.sol";
-import { Claim, GameType } from "src/dispute/lib/Types.sol";
+import { IZKVerifier } from "interfaces/dispute/zk/IZKVerifier.sol";
+import { Claim, Duration, GameType } from "src/dispute/lib/Types.sol";
 
 interface IOPContractsManagerUtils {
     struct ProxyDeployArgs {
@@ -34,6 +35,20 @@ interface IOPContractsManagerUtils {
         address challenger;
     }
 
+    /// @notice Configuration struct for the SuperPermissionedDisputeGame.
+    struct SuperPermissionedDisputeGameConfig {
+        address proposer;
+    }
+
+    /// @notice Configuration struct for the ZKDisputeGame.
+    struct ZKDisputeGameConfig {
+        Claim absolutePrestate;
+        IZKVerifier verifier;
+        Duration maxChallengeDuration;
+        Duration maxProveDuration;
+        uint256 challengerBond;
+    }
+
     /// @notice Generic dispute game configuration data.
     struct DisputeGameConfig {
         bool enabled;
@@ -45,6 +60,8 @@ interface IOPContractsManagerUtils {
     event ProxyCreation(string name, address proxy);
 
     error OPContractsManagerUtils_DowngradeNotAllowed(address _contract);
+    error OPContractsManagerUtils_ExtraTagInProd(address _contract);
+    error OPContractsManagerUtils_OZv5InitializableUnsupported();
     error OPContractsManagerUtils_ConfigLoadFailed(string _name);
     error OPContractsManagerUtils_ProxyMustLoad(string _name);
     error OPContractsManagerUtils_UnsupportedGameType();

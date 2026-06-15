@@ -1,13 +1,10 @@
 name: 'Docker Build Prep'
-description: 'Prepare environment for docker builds (checkout, kona version, git versions)'
+description: 'Prepare environment for docker builds (checkout, git versions)'
 
 outputs:
   versions:
     description: 'JSON object mapping image names to their GIT_VERSION'
     value: ${{ steps.compute_versions.outputs.versions }}
-  kona_version:
-    description: 'KONA_VERSION from kona/version.json'
-    value: ${{ steps.kona.outputs.version }}
   date:
     description: 'Current date in YYYYMMDD format'
     value: ${{ steps.date.outputs.date }}
@@ -15,6 +12,12 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Install mise
+      uses: jdx/mise-action@c1ecc8f748cd28cdeabf76dab3cccde4ce692fe4 # v4.0.0
+      with:
+        version: 2026.2.2
+        install_args: just
+
     - name: Get date
       id: date
       shell: bash
@@ -22,19 +25,13 @@ runs:
         DATE=$(date +%Y%m%d)
         echo "date=$DATE" >> $GITHUB_OUTPUT
 
-    - name: Read KONA_VERSION from kona/version.json
-      id: kona
-      shell: bash
-      run: |
-        KONA_VERSION=$(jq -r .version kona/version.json)
-        echo "version=$KONA_VERSION" >> $GITHUB_OUTPUT
-        echo "KONA_VERSION: $KONA_VERSION"
-
     - name: Compute GIT_VERSION for all images
       id: compute_versions
       shell: bash
+      env:
+        GIT_COMMIT: ${{ github.sha }}
       run: |
-        VERSIONS=$(GIT_COMMIT="${{ github.sha }}" make compute-git-versions)
+        VERSIONS=$(just compute-git-versions)
         echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
         echo "Computed versions: $VERSIONS"
 

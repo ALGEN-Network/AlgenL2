@@ -5,10 +5,9 @@ import (
 	"math/big"
 	"testing"
 
-	"golang.org/x/exp/constraints"
-
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
@@ -22,7 +21,7 @@ func TestAdd(t *testing.T) {
 	t.Run("uint", testAdd[uint])
 }
 
-func testAdd[V constraints.Unsigned](t *testing.T) {
+func testAdd[V Unsigned](t *testing.T) {
 	m := ^V(0)
 	require.Less(t, m+1, m, "sanity check max value does overflow")
 	vals := []V{
@@ -40,6 +39,7 @@ func testAdd[V constraints.Unsigned](t *testing.T) {
 				got, overflowed := SafeAdd(a, b)
 				require.Equal(t, expectedOverflow, overflowed)
 				// masked expected outcome to int size, since it may have overflowed
+				//nolint:bigint // Overflow is explicitly expected and handled here.
 				require.Equal(t, expectedSum.Uint64()&uint64(m), uint64(got))
 			}
 			{
@@ -47,7 +47,7 @@ func testAdd[V constraints.Unsigned](t *testing.T) {
 				if expectedOverflow {
 					require.Equal(t, uint64(m), uint64(got))
 				} else {
-					require.Equal(t, expectedSum.Uint64(), uint64(got))
+					require.Equal(t, bigs.Uint64Strict(expectedSum), uint64(got))
 				}
 			}
 		}
@@ -64,7 +64,7 @@ func TestSub(t *testing.T) {
 	t.Run("uint", testSub[uint])
 }
 
-func testSub[V constraints.Unsigned](t *testing.T) {
+func testSub[V Unsigned](t *testing.T) {
 	m := ^V(0)
 	require.Less(t, m+1, m, "sanity check min value does underflow")
 	vals := []V{

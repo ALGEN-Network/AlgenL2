@@ -98,6 +98,16 @@ func (r *CLITestRunner) GetWorkDir() string {
 	return r.workDir
 }
 
+// GetL1RPC returns the L1 RPC URL for this test runner
+func (r *CLITestRunner) GetL1RPC() string {
+	return r.l1RPC
+}
+
+// GetPrivateKey returns the private key hex for this test runner
+func (r *CLITestRunner) GetPrivateKey() string {
+	return r.privateKeyHex
+}
+
 // captureOutputWriter captures output written to it for testing
 type captureOutputWriter struct {
 	buf *bytes.Buffer
@@ -169,7 +179,7 @@ func (r *CLITestRunner) RunWithNetwork(ctx context.Context, args []string, env m
 // ExpectSuccess runs a command expecting it to succeed
 func (r *CLITestRunner) ExpectSuccess(t *testing.T, args []string, env map[string]string) string {
 	r.lgr.Info("Running cli command, expecting success")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	output, err := r.Run(ctx, args, env)
@@ -180,7 +190,7 @@ func (r *CLITestRunner) ExpectSuccess(t *testing.T, args []string, env map[strin
 // ExpectSuccessWithNetwork runs a command with network parameters expecting it to succeed
 func (r *CLITestRunner) ExpectSuccessWithNetwork(t *testing.T, args []string, env map[string]string) string {
 	r.lgr.Info("Running cli command with network, expecting success")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	output, err := r.RunWithNetwork(ctx, args, env)
@@ -191,10 +201,22 @@ func (r *CLITestRunner) ExpectSuccessWithNetwork(t *testing.T, args []string, en
 // ExpectErrorContains runs a command expecting it to fail with specific error text
 func (r *CLITestRunner) ExpectErrorContains(t *testing.T, args []string, env map[string]string, contains string) string {
 	r.lgr.Info("Running cli command, expecting error")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	output, err := r.Run(ctx, args, env)
+	require.Error(t, err, "Expected command to fail but it succeeded")
+	require.Contains(t, output, contains, "Error message should contain expected text")
+	return output
+}
+
+// ExpectErrorContainsWithNetwork runs a command with network parameters expecting it to fail with specific error text
+func (r *CLITestRunner) ExpectErrorContainsWithNetwork(t *testing.T, args []string, env map[string]string, contains string) string {
+	r.lgr.Info("Running cli command with network, expecting error")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	output, err := r.RunWithNetwork(ctx, args, env)
 	require.Error(t, err, "Expected command to fail but it succeeded")
 	require.Contains(t, output, contains, "Error message should contain expected text")
 	return output

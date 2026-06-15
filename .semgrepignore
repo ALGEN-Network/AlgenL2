@@ -18,4 +18,11 @@ vendor/
 op-chain-ops/script/testdata/scripts/
 
 # Op-alloy book theme (third-party mdbook assets)
-op-alloy/book/
+rust/op-alloy/book/
+
+# Op-reth test contracts (not production Solidity code)
+rust/op-reth/crates/tests/
+rust/op-reth/tests/
+
+# Public docs (example code, not production)
+docs/public-docs/

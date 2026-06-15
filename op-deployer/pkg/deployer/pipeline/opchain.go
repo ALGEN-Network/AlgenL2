@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"context"
 	"fmt"
 	"math/big"
 
@@ -36,22 +35,16 @@ func DeployOPChain(env *Env, intent *state.Intent, st *state.State, chainID comm
 	}
 
 	if env.UseForge {
-		if env.ForgeClient == nil {
-			return fmt.Errorf("Forge client is nil but UseForge is enabled")
-		}
-		if env.Context == nil {
-			env.Context = context.Background()
-		}
 		lgr.Info("using Forge for DeployOPChain")
-		forgeCaller := opcm.NewDeployOPChainForgeCaller(env.ForgeClient)
-		forgeOpts := []string{
-			"--rpc-url", env.L1RPCUrl,
-			"--broadcast",
-			"--private-key", env.PrivateKey,
+		forgeEnv := &opcm.ForgeEnv{
+			Client:     env.ForgeClient,
+			Context:    env.Context,
+			L1RPCUrl:   env.L1RPCUrl,
+			PrivateKey: env.PrivateKey,
 		}
-		dco, _, err = forgeCaller(env.Context, dci, forgeOpts...)
+		dco, err = opcm.DeployOPChainViaForge(forgeEnv, dci)
 		if err != nil {
-			return fmt.Errorf("failed to deploy OP Chain with Forge: %w", err)
+			return err
 		}
 	} else {
 		dco, err = env.Scripts.DeployOPChain.Run(dci)
@@ -68,20 +61,20 @@ func DeployOPChain(env *Env, intent *state.Intent, st *state.State, chainID comm
 		L1StandardBridgeProxy:             dco.L1StandardBridgeProxy,
 		OptimismPortalProxy:               dco.OptimismPortalProxy,
 		DisputeGameFactoryProxy:           dco.DisputeGameFactoryProxy,
-		DelayedWETHPermissionedGameProxy:  dco.DelayedWETHPermissionedGameProxy,
 		Opcm:                              dci.Opcm,
 	}
 
 	var impls opcm.ReadImplementationAddressesOutput
 	if env.UseForge {
 		lgr.Info("using Forge for ReadImplementationAddresses")
-		forgeCaller := opcm.NewReadImplementationAddressesForgeCaller(env.ForgeClient)
-		forgeOpts := []string{
-			"--rpc-url", env.L1RPCUrl,
+		forgeEnv := &opcm.ForgeEnv{
+			Client:   env.ForgeClient,
+			Context:  env.Context,
+			L1RPCUrl: env.L1RPCUrl,
 		}
-		impls, _, err = forgeCaller(env.Context, readInput, forgeOpts...)
+		impls, err = opcm.ReadImplementationAddressesViaForge(forgeEnv, readInput)
 		if err != nil {
-			return fmt.Errorf("failed to run ReadImplementationAddresses with Forge: %w", err)
+			return err
 		}
 	} else {
 		readImplementations, err := opcm.NewReadImplementationAddressesScript(env.L1ScriptHost)
@@ -99,7 +92,6 @@ func DeployOPChain(env *Env, intent *state.Intent, st *state.State, chainID comm
 
 	st.ImplementationsDeployment.DelayedWethImpl = impls.DelayedWETH
 	st.ImplementationsDeployment.OptimismPortalImpl = impls.OptimismPortal
-	st.ImplementationsDeployment.OptimismPortalInteropImpl = impls.OptimismPortalInterop
 	st.ImplementationsDeployment.EthLockboxImpl = impls.EthLockbox
 	st.ImplementationsDeployment.SystemConfigImpl = impls.SystemConfig
 	st.ImplementationsDeployment.AnchorStateRegistryImpl = impls.AnchorStateRegistry
@@ -112,11 +104,10 @@ func DeployOPChain(env *Env, intent *state.Intent, st *state.State, chainID comm
 	st.ImplementationsDeployment.PreimageOracleImpl = impls.PreimageOracleSingleton
 	st.ImplementationsDeployment.FaultDisputeGameImpl = impls.FaultDisputeGame
 	st.ImplementationsDeployment.PermissionedDisputeGameImpl = impls.PermissionedDisputeGame
-	st.ImplementationsDeployment.OpcmDeployerImpl = impls.OpcmDeployer
-	st.ImplementationsDeployment.OpcmGameTypeAdderImpl = impls.OpcmGameTypeAdder
-	st.ImplementationsDeployment.OpcmUpgraderImpl = impls.OpcmUpgrader
-	st.ImplementationsDeployment.OpcmInteropMigratorImpl = impls.OpcmInteropMigrator
+	st.ImplementationsDeployment.ZkDisputeGameImpl = impls.ZkDisputeGame
 	st.ImplementationsDeployment.OpcmStandardValidatorImpl = impls.OpcmStandardValidator
+	st.ImplementationsDeployment.SuperFaultDisputeGameImpl = impls.SuperFaultDisputeGame
+	st.ImplementationsDeployment.SuperPermissionedDisputeGameImpl = impls.SuperPermissionedDisputeGame
 
 	return nil
 }
@@ -138,14 +129,7 @@ func makeDCI(intent *state.Intent, thisIntent *state.ChainIntent, chainID common
 		return opcm.DeployOPChainInput{}, fmt.Errorf("error merging proof params from overrides: %w", err)
 	}
 
-	// Select which OPCM to use based on dev feature flag
-	opcmAddr := st.ImplementationsDeployment.OpcmImpl
-	if devFeatureBitmap, ok := intent.GlobalDeployOverrides["devFeatureBitmap"].(common.Hash); ok {
-		opcmV2Flag := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000010000")
-		if isDevFeatureEnabled(devFeatureBitmap, opcmV2Flag) {
-			opcmAddr = st.ImplementationsDeployment.OpcmV2Impl
-		}
-	}
+	opcmAddr := st.ImplementationsDeployment.OpcmV2Impl
 	if opcmAddr == (common.Address{}) {
 		return opcm.DeployOPChainInput{}, fmt.Errorf("OPCM implementation is not deployed")
 	}
@@ -216,15 +200,4 @@ func shouldDeployOPChain(st *state.State, chainID common.Hash) bool {
 	}
 
 	return true
-}
-
-// isDevFeatureEnabled checks if a specific development feature is enabled in a feature bitmap.
-// This mirrors the function in devfeatures.go to avoid import cycles.
-func isDevFeatureEnabled(bitmap, flag common.Hash) bool {
-	b := new(big.Int).SetBytes(bitmap[:])
-	f := new(big.Int).SetBytes(flag[:])
-
-	featuresIsNonZero := f.Cmp(big.NewInt(0)) != 0
-	bitmapContainsFeatures := new(big.Int).And(b, f).Cmp(f) == 0
-	return featuresIsNonZero && bitmapContainsFeatures
 }

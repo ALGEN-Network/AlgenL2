@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 
+	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
@@ -41,8 +42,8 @@ type FetchingAttributesBuilder struct {
 }
 
 func NewFetchingAttributesBuilder(rollupCfg *rollup.Config, l1ChainConfig *params.ChainConfig, depSet DependencySet, l1 L1ReceiptsFetcher, l2 SystemConfigL2Fetcher) *FetchingAttributesBuilder {
-	if rollupCfg.InteropTime != nil && depSet == nil {
-		panic("FetchingAttributesBuilder requires a dependency set when interop fork is scheduled")
+	if rollupCfg.LagoonTime != nil && depSet == nil {
+		panic("FetchingAttributesBuilder requires a dependency set when Lagoon fork is scheduled")
 	}
 	return &FetchingAttributesBuilder{
 		rollupCfg:     rollupCfg,
@@ -153,20 +154,30 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		upgradeTxs = append(upgradeTxs, jovian...)
 	}
 
-	if ba.rollupCfg.IsInteropActivationBlock(nextL2Time) {
-		interop, err := InteropNetworkUpgradeTransactions()
+	// Starting with Karst, upgrade transactions are loaded from a NUT bundle and
+	// additional gas is allocated to the upgrade block so that upgrade transactions
+	// don't need to fit within the system tx gas limit.
+	var upgradeGas uint64
+	if ba.rollupCfg.IsL2CMActivationBlock(nextL2Time) {
+		nutTxs, nutGas, err := UpgradeTransactions(forks.Karst)
 		if err != nil {
-			return nil, NewCriticalError(fmt.Errorf("failed to build interop network upgrade txs: %w", err))
+			return nil, NewCriticalError(fmt.Errorf("failed to build karst network upgrade txs: %w", err))
 		}
-		upgradeTxs = append(upgradeTxs, interop...)
+		upgradeTxs = append(upgradeTxs, nutTxs...)
+		upgradeGas += nutGas
+	}
 
-		if len(ba.depSet.Chains()) > 1 {
-			txs, err := InteropActivateCrossL2InboxTransactions()
-			if err != nil {
-				return nil, NewCriticalError(fmt.Errorf("failed to build interop cross l2 inbox txs: %w", err))
-			}
-			upgradeTxs = append(upgradeTxs, txs...)
+	if ba.rollupCfg.IsInteropActivationBlock(nextL2Time) {
+		// The Interop NUT bundle executes on all chains. The setFeature and
+		// ETHLiquidity funding wrappers only execute for chains in a multi-chain
+		// dependency set, which signals the L2ContractsManager to activate
+		// Interop-specific contracts.
+		interopTxs, interopGas, err := InteropActivationUpgradeTransactions(len(ba.depSet.Chains()) > 1)
+		if err != nil {
+			return nil, NewCriticalError(err)
 		}
+		upgradeTxs = append(upgradeTxs, interopTxs...)
+		upgradeGas += interopGas
 	}
 
 	l1InfoTx, err := L1InfoDepositBytes(ba.rollupCfg, ba.l1ChainConfig, sysConfig, seqNumber, l1Info, nextL2Time)
@@ -192,13 +203,15 @@ func (ba *FetchingAttributesBuilder) PreparePayloadAttributes(ctx context.Contex
 		}
 	}
 
+	gasLimit := sysConfig.GasLimit + upgradeGas
+
 	r := &eth.PayloadAttributes{
 		Timestamp:             hexutil.Uint64(nextL2Time),
 		PrevRandao:            eth.Bytes32(l1Info.MixDigest()),
 		SuggestedFeeRecipient: predeploys.SequencerFeeVaultAddr,
 		Transactions:          txs,
 		NoTxPool:              true,
-		GasLimit:              (*eth.Uint64Quantity)(&sysConfig.GasLimit),
+		GasLimit:              (*eth.Uint64Quantity)(&gasLimit),
 		Withdrawals:           withdrawals,
 		ParentBeaconBlockRoot: parentBeaconRoot,
 	}

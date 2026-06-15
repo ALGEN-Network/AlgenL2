@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/verify"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
+	"github.com/ethereum-optimism/optimism/op-service/bigs"
 	"github.com/ethereum-optimism/optimism/op-service/cliutil"
 	opcrypto "github.com/ethereum-optimism/optimism/op-service/crypto"
 	"github.com/ethereum-optimism/optimism/op-service/ctxinterrupt"
@@ -47,7 +48,6 @@ type ImplementationsConfig struct {
 	FaultGameClockExtension         uint64             `cli:"dispute-clock-extension"`
 	FaultGameMaxClockDuration       uint64             `cli:"dispute-max-clock-duration"`
 	SuperchainConfigProxy           common.Address     `cli:"superchain-config-proxy"`
-	ProtocolVersionsProxy           common.Address     `cli:"protocol-versions-proxy"`
 	L1ProxyAdminOwner               common.Address     `cli:"l1-proxy-admin-owner"`
 	SuperchainProxyAdmin            common.Address     `cli:"superchain-proxy-admin"`
 	Challenger                      common.Address     `cli:"challenger"`
@@ -111,9 +111,6 @@ func (c *ImplementationsConfig) Check() error {
 	}
 	if c.SuperchainConfigProxy == (common.Address{}) {
 		return errors.New("superchain config proxy must be specified")
-	}
-	if c.ProtocolVersionsProxy == (common.Address{}) {
-		return errors.New("protocol versions proxy must be specified")
 	}
 	if c.L1ProxyAdminOwner == (common.Address{}) {
 		return errors.New("l1 proxy admin owner must be specified")
@@ -184,7 +181,7 @@ func ImplementationsCLI(cliCtx *cli.Context) error {
 		ctx,
 		l,
 		l1RPCUrl,
-		chainID.Uint64(),
+		bigs.Uint64Strict(chainID),
 		verifyFile,
 		cfg.ArtifactsLocator,
 		cliCtx.String(deployer.VerifierTypeFlagName),
@@ -219,7 +216,6 @@ func Implementations(ctx context.Context, cfg ImplementationsConfig) (opcm.Deplo
 		FaultGameV2ClockExtension:       new(big.Int).SetUint64(cfg.FaultGameClockExtension),
 		FaultGameV2MaxClockDuration:     new(big.Int).SetUint64(cfg.FaultGameMaxClockDuration),
 		SuperchainConfigProxy:           cfg.SuperchainConfigProxy,
-		ProtocolVersionsProxy:           cfg.ProtocolVersionsProxy,
 		SuperchainProxyAdmin:            cfg.SuperchainProxyAdmin,
 		L1ProxyAdminOwner:               cfg.L1ProxyAdminOwner,
 		Challenger:                      cfg.Challenger,
@@ -232,15 +228,15 @@ func Implementations(ctx context.Context, cfg ImplementationsConfig) (opcm.Deplo
 			return dio, fmt.Errorf("failed to create forge client: %w", err)
 		}
 
-		forgeCaller := opcm.NewDeployImplementationsForgeCaller(forgeClient)
-		forgeOpts := []string{
-			"--rpc-url", cfg.L1RPCUrl,
-			"--broadcast",
-			"--private-key", cfg.PrivateKey,
+		forgeEnv := &opcm.ForgeEnv{
+			Client:     forgeClient,
+			Context:    ctx,
+			L1RPCUrl:   cfg.L1RPCUrl,
+			PrivateKey: cfg.PrivateKey,
 		}
-		dio, _, err = forgeCaller(ctx, input, forgeOpts...)
+		dio, err = opcm.DeployImplementationsViaForge(forgeEnv, input)
 		if err != nil {
-			return dio, fmt.Errorf("failed to deploy implementations with Forge: %w", err)
+			return dio, err
 		}
 	} else {
 		l1Client, err := ethclient.Dial(cfg.L1RPCUrl)

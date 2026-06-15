@@ -6,10 +6,6 @@ variable "REPOSITORY" {
   default = "oplabs-tools-artifacts/images"
 }
 
-variable "KONA_VERSION" {
-  default = "none"
-}
-
 variable "GIT_COMMIT" {
   default = "dev"
 }
@@ -54,14 +50,6 @@ variable "OP_CHALLENGER_VERSION" {
 }
 
 variable "OP_DISPUTE_MON_VERSION" {
-  default = "${GIT_VERSION}"
-}
-
-variable "OP_PROGRAM_VERSION" {
-  default = "${GIT_VERSION}"
-}
-
-variable "OP_SUPERVISOR_VERSION" {
   default = "${GIT_VERSION}"
 }
 
@@ -148,7 +136,6 @@ target "op-challenger" {
     GIT_COMMIT = "${GIT_COMMIT}"
     GIT_DATE = "${GIT_DATE}"
     OP_CHALLENGER_VERSION = "${OP_CHALLENGER_VERSION}"
-    KONA_VERSION="${KONA_VERSION}"
   }
   target = "op-challenger-target"
   platforms = split(",", PLATFORMS)
@@ -191,32 +178,6 @@ target "da-server" {
   target = "da-server-target"
   platforms = split(",", PLATFORMS)
   tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/da-server:${tag}"]
-}
-
-target "op-program" {
-  dockerfile = "ops/docker/op-stack-go/Dockerfile"
-  context = "."
-  args = {
-    GIT_COMMIT = "${GIT_COMMIT}"
-    GIT_DATE = "${GIT_DATE}"
-    OP_PROGRAM_VERSION = "${OP_PROGRAM_VERSION}"
-  }
-  target = "op-program-target"
-  platforms = split(",", PLATFORMS)
-  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/op-program:${tag}"]
-}
-
-target "op-supervisor" {
-  dockerfile = "ops/docker/op-stack-go/Dockerfile"
-  context = "."
-  args = {
-    GIT_COMMIT = "${GIT_COMMIT}"
-    GIT_DATE = "${GIT_DATE}"
-    OP_SUPERVISOR_VERSION = "${OP_SUPERVISOR_VERSION}"
-  }
-  target = "op-supervisor-target"
-  platforms = split(",", PLATFORMS)
-  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/op-supervisor:${tag}"]
 }
 
 target "op-supernode" {
@@ -332,4 +293,111 @@ target "op-interop-mon" {
   target = "op-interop-mon-target"
   platforms = split(",", PLATFORMS)
   tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/op-interop-mon:${tag}"]
+}
+
+// Rust-based images
+
+target "kona-node" {
+  dockerfile = "kona/docker/apps/kona_app_generic.dockerfile"
+  context = "rust"
+  contexts = {
+    nuts-bundles = "op-core/nuts/bundles"
+  }
+  args = {
+    REPO_LOCATION = "local"
+    BIN_TARGET = "kona-node"
+    BUILD_PROFILE = "release"
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/kona-node:${tag}"]
+}
+
+target "kona-host" {
+  dockerfile = "kona/docker/apps/kona_app_generic.dockerfile"
+  context = "rust"
+  contexts = {
+    nuts-bundles = "op-core/nuts/bundles"
+  }
+  args = {
+    REPO_LOCATION = "local"
+    BIN_TARGET = "kona-host"
+    BUILD_PROFILE = "release"
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/kona-host:${tag}"]
+}
+
+target "kona-client" {
+  dockerfile = "kona/docker/apps/kona_app_generic.dockerfile"
+  context = "rust"
+  contexts = {
+    nuts-bundles = "op-core/nuts/bundles"
+  }
+  args = {
+    REPO_LOCATION = "local"
+    BIN_TARGET = "kona-client"
+    BUILD_PROFILE = "release"
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/kona-client:${tag}"]
+}
+
+target "op-reth" {
+  dockerfile = "op-reth/DockerfileOp"
+  context = "rust"
+  args = {
+    BUILD_PROFILE = "maxperf"
+    FEATURES = ""
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/op-reth:${tag}"]
+}
+
+// op-rbuilder and rollup-boost are vendored Rust workspaces under rust/ with
+// path dependencies on sibling crates (op-reth, op-alloy, op-revm, ...). Their
+// Dockerfiles build from inside the crate dir (the `.` context) and pull the
+// sibling crates in via the `monorepo-rust` named context (the rust/ workspace).
+// See the comments at the top of each Dockerfile for the layout.
+target "op-rbuilder" {
+  dockerfile = "Dockerfile"
+  context = "rust/op-rbuilder"
+  contexts = {
+    monorepo-rust = "rust"
+  }
+  args = {
+    RBUILDER_BIN = "op-rbuilder"
+    FEATURES = ""
+  }
+  target = "rbuilder-runtime"
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/op-rbuilder:${tag}"]
+}
+
+target "rollup-boost" {
+  dockerfile = "Dockerfile"
+  context = "rust/rollup-boost"
+  contexts = {
+    monorepo-rust = "rust"
+  }
+  args = {
+    SERVICE_NAME = "rollup-boost"
+    FEATURES = ""
+    RELEASE = "true"
+  }
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/rollup-boost:${tag}"]
+}
+
+target "cannon-builder" {
+  dockerfile = "cannon.dockerfile"
+  context = "rust/kona/docker/cannon"
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/cannon-builder:${tag}"]
+}
+
+target "ci-base-clang" {
+  dockerfile = "Dockerfile"
+  context = "ops/docker/ci-base-clang"
+  platforms = split(",", PLATFORMS)
+  tags = [for tag in split(",", IMAGE_TAGS) : "${REGISTRY}/${REPOSITORY}/ci-base-clang:${tag}"]
 }

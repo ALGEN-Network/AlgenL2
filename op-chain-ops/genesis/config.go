@@ -86,22 +86,6 @@ type DevDeployConfig struct {
 	FundDevAccounts bool `json:"fundDevAccounts"`
 }
 
-type RevenueShareDeployConfig struct {
-	UseRevenueShare    bool           `json:"useRevenueShare"`
-	ChainFeesRecipient common.Address `json:"chainFeesRecipient"`
-}
-
-var _ ConfigChecker = (*RevenueShareDeployConfig)(nil)
-
-func (d *RevenueShareDeployConfig) Check(log log.Logger) error {
-	if d.UseRevenueShare {
-		if d.ChainFeesRecipient == (common.Address{}) {
-			return fmt.Errorf("%w: ChainFeesRecipient cannot be address(0)", ErrInvalidDeployConfig)
-		}
-	}
-	return nil
-}
-
 type L2GenesisBlockDeployConfig struct {
 	L2GenesisBlockNonce         hexutil.Uint64 `json:"l2GenesisBlockNonce"`
 	L2GenesisBlockGasLimit      hexutil.Uint64 `json:"l2GenesisBlockGasLimit"`
@@ -407,9 +391,12 @@ type UpgradeScheduleDeployConfig struct {
 	// L2GenesisJovianTimeOffset is the number of seconds after genesis block that the Jovian hard fork activates.
 	// Set it to 0 to activate at genesis. Nil to disable Jovian.
 	L2GenesisJovianTimeOffset *hexutil.Uint64 `json:"l2GenesisJovianTimeOffset,omitempty"`
-	// L2GenesisInteropTimeOffset is the number of seconds after genesis block that the Interop hard fork activates.
-	// Set it to 0 to activate at genesis. Nil to disable Interop.
-	L2GenesisInteropTimeOffset *hexutil.Uint64 `json:"l2GenesisInteropTimeOffset,omitempty"`
+	// L2GenesisKarstTimeOffset is the number of seconds after genesis block that the Karst hard fork activates.
+	// Set it to 0 to activate at genesis. Nil to disable Karst.
+	L2GenesisKarstTimeOffset *hexutil.Uint64 `json:"l2GenesisKarstTimeOffset,omitempty"`
+	// L2GenesisLagoonTimeOffset is the number of seconds after genesis block that the Lagoon hard fork activates.
+	// Set it to 0 to activate at genesis. Nil to disable Lagoon.
+	L2GenesisLagoonTimeOffset *hexutil.Uint64 `json:"l2GenesisLagoonTimeOffset,omitempty"`
 
 	// Optional Forks
 
@@ -468,8 +455,10 @@ func (d *UpgradeScheduleDeployConfig) ForkTimeOffset(fork rollup.ForkName) *uint
 		return (*uint64)(d.L2GenesisIsthmusTimeOffset)
 	case forks.Jovian:
 		return (*uint64)(d.L2GenesisJovianTimeOffset)
-	case forks.Interop:
-		return (*uint64)(d.L2GenesisInteropTimeOffset)
+	case forks.Karst:
+		return (*uint64)(d.L2GenesisKarstTimeOffset)
+	case forks.Lagoon:
+		return (*uint64)(d.L2GenesisLagoonTimeOffset)
 	default:
 		panic(fmt.Sprintf("unknown fork: %s", fork))
 	}
@@ -495,8 +484,10 @@ func (d *UpgradeScheduleDeployConfig) SetForkTimeOffset(fork rollup.ForkName, of
 		d.L2GenesisIsthmusTimeOffset = (*hexutil.Uint64)(offset)
 	case forks.Jovian:
 		d.L2GenesisJovianTimeOffset = (*hexutil.Uint64)(offset)
-	case forks.Interop:
-		d.L2GenesisInteropTimeOffset = (*hexutil.Uint64)(offset)
+	case forks.Karst:
+		d.L2GenesisKarstTimeOffset = (*hexutil.Uint64)(offset)
+	case forks.Lagoon:
+		d.L2GenesisLagoonTimeOffset = (*hexutil.Uint64)(offset)
 	default:
 		panic(fmt.Sprintf("unknown fork: %s", fork))
 	}
@@ -571,8 +562,12 @@ func (d *UpgradeScheduleDeployConfig) JovianTime(genesisTime uint64) *uint64 {
 	return offsetToUpgradeTime(d.L2GenesisJovianTimeOffset, genesisTime)
 }
 
-func (d *UpgradeScheduleDeployConfig) InteropTime(genesisTime uint64) *uint64 {
-	return offsetToUpgradeTime(d.L2GenesisInteropTimeOffset, genesisTime)
+func (d *UpgradeScheduleDeployConfig) KarstTime(genesisTime uint64) *uint64 {
+	return offsetToUpgradeTime(d.L2GenesisKarstTimeOffset, genesisTime)
+}
+
+func (d *UpgradeScheduleDeployConfig) LagoonTime(genesisTime uint64) *uint64 {
+	return offsetToUpgradeTime(d.L2GenesisLagoonTimeOffset, genesisTime)
 }
 
 func (d *UpgradeScheduleDeployConfig) AllocMode(genesisTime uint64) L2AllocsMode {
@@ -605,7 +600,8 @@ func (d *UpgradeScheduleDeployConfig) forks() []Fork {
 		{L2GenesisTimeOffset: d.L2GenesisHoloceneTimeOffset, Name: string(L2AllocsHolocene)},
 		{L2GenesisTimeOffset: d.L2GenesisIsthmusTimeOffset, Name: string(L2AllocsIsthmus)},
 		{L2GenesisTimeOffset: d.L2GenesisJovianTimeOffset, Name: string(L2AllocsJovian)},
-		{L2GenesisTimeOffset: d.L2GenesisInteropTimeOffset, Name: string(L2AllocsInterop)},
+		{L2GenesisTimeOffset: d.L2GenesisKarstTimeOffset, Name: string(L2AllocsKarst)},
+		{L2GenesisTimeOffset: d.L2GenesisLagoonTimeOffset, Name: string(L2AllocsLagoon)},
 	}
 }
 
@@ -786,7 +782,6 @@ type L2InitializationConfig struct {
 	L2CoreDeployConfig
 	FeeMarketConfig
 	AltDADeployConfig
-	RevenueShareDeployConfig
 }
 
 func (d *L2InitializationConfig) Check(log log.Logger) error {
@@ -818,24 +813,11 @@ type DevL1DeployConfig struct {
 // SuperchainL1DeployConfig configures parameters of the superchain-wide deployed contracts to L1.
 // This deployment is global, and can be reused between L2s that target the same superchain.
 type SuperchainL1DeployConfig struct {
-	// RequiredProtocolVersion indicates the protocol version that
-	// nodes are required to adopt, to stay in sync with the network.
-	RequiredProtocolVersion params.ProtocolVersion `json:"requiredProtocolVersion"`
-	// RequiredProtocolVersion indicates the protocol version that
-	// nodes are recommended to adopt, to stay in sync with the network.
-	RecommendedProtocolVersion params.ProtocolVersion `json:"recommendedProtocolVersion"`
-
 	// SuperchainConfigGuardian represents the GUARDIAN account in the SuperchainConfig. Has the ability to pause withdrawals.
 	SuperchainConfigGuardian common.Address `json:"superchainConfigGuardian"`
 }
 
 func (d *SuperchainL1DeployConfig) Check(log log.Logger) error {
-	if d.RequiredProtocolVersion == (params.ProtocolVersion{}) {
-		log.Warn("RequiredProtocolVersion is empty")
-	}
-	if d.RecommendedProtocolVersion == (params.ProtocolVersion{}) {
-		log.Warn("RecommendedProtocolVersion is empty")
-	}
 	if d.SuperchainConfigGuardian == (common.Address{}) {
 		return fmt.Errorf("%w: SuperchainConfigGuardian cannot be address(0)", ErrInvalidDeployConfig)
 	}
@@ -955,8 +937,6 @@ type L1DependenciesConfig struct {
 
 	// DAChallengeProxy represents the L1 address of the DataAvailabilityChallenge contract.
 	DAChallengeProxy common.Address `json:"daChallengeProxy"`
-
-	ProtocolVersionsProxy common.Address `json:"protocolVersionsProxy"`
 }
 
 // DependencyContext is the contextual configuration needed to verify the L1 dependencies,
@@ -1144,29 +1124,29 @@ func (d *DeployConfig) RollupConfig(l1StartBlock *eth.BlockRef, l2GenesisBlockHa
 			L2Time:       l1StartBlock.Time,
 			SystemConfig: d.GenesisSystemConfig(),
 		},
-		BlockTime:               d.L2BlockTime,
-		MaxSequencerDrift:       d.MaxSequencerDrift,
-		SeqWindowSize:           d.SequencerWindowSize,
-		ChannelTimeoutBedrock:   d.ChannelTimeoutBedrock,
-		L1ChainID:               new(big.Int).SetUint64(d.L1ChainID),
-		L2ChainID:               new(big.Int).SetUint64(d.L2ChainID),
-		BatchInboxAddress:       d.BatchInboxAddress,
-		DepositContractAddress:  d.OptimismPortalProxy,
-		L1SystemConfigAddress:   d.SystemConfigProxy,
-		RegolithTime:            d.RegolithTime(l1StartTime),
-		CanyonTime:              d.CanyonTime(l1StartTime),
-		DeltaTime:               d.DeltaTime(l1StartTime),
-		EcotoneTime:             d.EcotoneTime(l1StartTime),
-		FjordTime:               d.FjordTime(l1StartTime),
-		GraniteTime:             d.GraniteTime(l1StartTime),
-		HoloceneTime:            d.HoloceneTime(l1StartTime),
-		PectraBlobScheduleTime:  d.PectraBlobScheduleTime(l1StartTime),
-		IsthmusTime:             d.IsthmusTime(l1StartTime),
-		JovianTime:              d.JovianTime(l1StartTime),
-		InteropTime:             d.InteropTime(l1StartTime),
-		ProtocolVersionsAddress: d.ProtocolVersionsProxy,
-		AltDAConfig:             altDA,
-		ChainOpConfig:           chainOpConfig,
+		BlockTime:              d.L2BlockTime,
+		MaxSequencerDrift:      d.MaxSequencerDrift,
+		SeqWindowSize:          d.SequencerWindowSize,
+		ChannelTimeoutBedrock:  d.ChannelTimeoutBedrock,
+		L1ChainID:              new(big.Int).SetUint64(d.L1ChainID),
+		L2ChainID:              new(big.Int).SetUint64(d.L2ChainID),
+		BatchInboxAddress:      d.BatchInboxAddress,
+		DepositContractAddress: d.OptimismPortalProxy,
+		L1SystemConfigAddress:  d.SystemConfigProxy,
+		RegolithTime:           d.RegolithTime(l1StartTime),
+		CanyonTime:             d.CanyonTime(l1StartTime),
+		DeltaTime:              d.DeltaTime(l1StartTime),
+		EcotoneTime:            d.EcotoneTime(l1StartTime),
+		FjordTime:              d.FjordTime(l1StartTime),
+		GraniteTime:            d.GraniteTime(l1StartTime),
+		HoloceneTime:           d.HoloceneTime(l1StartTime),
+		PectraBlobScheduleTime: d.PectraBlobScheduleTime(l1StartTime),
+		IsthmusTime:            d.IsthmusTime(l1StartTime),
+		JovianTime:             d.JovianTime(l1StartTime),
+		KarstTime:              d.KarstTime(l1StartTime),
+		LagoonTime:             d.LagoonTime(l1StartTime),
+		AltDAConfig:            altDA,
+		ChainOpConfig:          chainOpConfig,
 	}, nil
 }
 
@@ -1229,15 +1209,12 @@ type L1Deployments struct {
 	OptimismMintableERC20Factory      common.Address `json:"OptimismMintableERC20Factory"`
 	OptimismMintableERC20FactoryProxy common.Address `json:"OptimismMintableERC20FactoryProxy"`
 	OptimismPortal                    common.Address `json:"OptimismPortal"`
-	OptimismPortalInterop             common.Address `json:"OptimismPortalInterop"`
 	OptimismPortalProxy               common.Address `json:"OptimismPortalProxy"`
 	ETHLockbox                        common.Address `json:"ETHLockbox"`
 	ETHLockboxProxy                   common.Address `json:"ETHLockboxProxy"`
 	ProxyAdmin                        common.Address `json:"ProxyAdmin"`
 	SystemConfig                      common.Address `json:"SystemConfig"`
 	SystemConfigProxy                 common.Address `json:"SystemConfigProxy"`
-	ProtocolVersions                  common.Address `json:"ProtocolVersions"`
-	ProtocolVersionsProxy             common.Address `json:"ProtocolVersionsProxy"`
 	DataAvailabilityChallenge         common.Address `json:"DataAvailabilityChallenge"`
 	DataAvailabilityChallengeProxy    common.Address `json:"DataAvailabilityChallengeProxy"`
 }
@@ -1257,15 +1234,12 @@ func CreateL1DeploymentsFromContracts(contracts *addresses.L1Contracts) *L1Deplo
 		OptimismMintableERC20Factory:      contracts.OptimismMintableErc20FactoryImpl,
 		OptimismMintableERC20FactoryProxy: contracts.OptimismMintableErc20FactoryProxy,
 		OptimismPortal:                    contracts.OptimismPortalImpl,
-		OptimismPortalInterop:             contracts.OptimismPortalInteropImpl,
 		OptimismPortalProxy:               contracts.OptimismPortalProxy,
 		ETHLockbox:                        contracts.EthLockboxImpl,
 		ETHLockboxProxy:                   contracts.EthLockboxProxy,
 		ProxyAdmin:                        contracts.OpChainProxyAdminImpl,
 		SystemConfig:                      contracts.SystemConfigImpl,
 		SystemConfigProxy:                 contracts.SystemConfigProxy,
-		ProtocolVersions:                  contracts.ProtocolVersionsImpl,
-		ProtocolVersionsProxy:             contracts.ProtocolVersionsProxy,
 		DataAvailabilityChallenge:         contracts.AltDAChallengeImpl,
 		DataAvailabilityChallengeProxy:    contracts.AltDAChallengeProxy,
 	}

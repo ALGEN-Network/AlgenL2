@@ -40,7 +40,7 @@ func NewDisputeGameContractForGame(ctx context.Context, metrics metrics.Contract
 
 func NewDisputeGameContract(ctx context.Context, metrics metrics.ContractMetricer, caller *batching.MultiCaller, gameType gameTypes.GameType, addr common.Address) (DisputeGameContract, error) {
 	switch gameType {
-	case gameTypes.SuperCannonGameType, gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType:
+	case gameTypes.SuperCannonKonaGameType, gameTypes.SuperPermissionedGameType:
 		return NewSuperFaultDisputeGameContract(ctx, metrics, addr, caller)
 
 	case gameTypes.CannonGameType,
@@ -49,8 +49,8 @@ func NewDisputeGameContract(ctx context.Context, metrics metrics.ContractMetrice
 		gameTypes.AlphabetGameType,
 		gameTypes.FastGameType:
 		return NewPreInteropFaultDisputeGameContract(ctx, metrics, addr, caller)
-	case gameTypes.OptimisticZKGameType:
-		return NewOptimisticZKDisputeGameContract(metrics, addr, caller)
+	case gameTypes.ZKDisputeGameType:
+		return NewZKDisputeGameContract(metrics, addr, caller)
 	default:
 		return nil, ErrUnsupportedGameType
 	}
